@@ -139,14 +139,10 @@ class BhyveSprinklerZoneValve(BhyveZoneCoordinatorEntity, ValveEntity):
         if not zone.enabled:
             raise HomeAssistantError(f"Zone '{zone.name}' is disabled in B-hyve")
 
-        duration = self._entry.runtime_data.quick_run_durations.get(
-            self._duration_key,
-            DEFAULT_QUICK_RUN_DURATION,
-        )
         await self.coordinator.async_quick_run_zone(
             self._device_id,
             self._zone_number,
-            duration,
+            DEFAULT_QUICK_RUN_DURATION,
         )
 
     async def async_close_valve(self) -> None:

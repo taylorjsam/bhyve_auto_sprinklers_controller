@@ -879,8 +879,13 @@ def _build_controller_dashboard_text(
         f"{entry.entry_id}_{CONF_WIND_GUST_ENTITY_ID}_source"
     )
     zones = sorted(controller.zones, key=lambda item: item.zone_number)
-    zone_dashboard_data: list[dict[str, str | int | None]] = []
+    zone_dashboard_data: list[dict[str, str | int | float | None]] = []
     for zone in zones:
+        runtime_key = f"{controller.device_id}:{zone.zone_number}"
+        profile = normalize_zone_watering_profile(
+            entry.runtime_data.zone_watering_profiles.get(runtime_key)
+        )
+        application_rate = entry.runtime_data.zone_application_rates.get(runtime_key, 0.0)
         valve_entity = controller_entities.get(f"{controller.device_id}_{zone.zone_number}_valve")
         recommended_runtime_entity = controller_entities.get(
             f"{controller.device_id}_{zone.zone_number}_recommended_runtime"
@@ -943,8 +948,15 @@ def _build_controller_dashboard_text(
             {
                 "name": zone.name,
                 "label": _compact_zone_name(zone.name, controller.nickname),
+                "overview_label": _overview_zone_row_label(
+                    zone.name,
+                    controller.nickname,
+                    profile,
+                    application_rate,
+                ),
+                "profile_value": profile,
                 "zone_number": zone.zone_number,
-                "runtime_key": f"{controller.device_id}:{zone.zone_number}",
+                "runtime_key": runtime_key,
                 "valve": valve_entity,
                 "recommended_runtime": recommended_runtime_entity,
                 "overview_runtime": overview_runtime_entity,
@@ -1080,8 +1092,13 @@ def _build_controller_dashboard_text(
         lines,
         "",
         [
-            zone_data["overview_runtime"] or zone_data["recommended_runtime"]
+            {
+                "entity": zone_data["overview_runtime"] or zone_data["recommended_runtime"],
+                "name": zone_data["overview_label"],
+                "icon": _profile_icon(str(zone_data["profile_value"])),
+            }
             for zone_data in zone_dashboard_data
+            if zone_data["overview_runtime"] or zone_data["recommended_runtime"]
         ],
         indent="          ",
         variant="zones",
@@ -2286,6 +2303,29 @@ def _compact_zone_name(name: str, controller_name: str | None = None) -> str:
     compact = compact.replace("Middle-strip", "Middle")
     compact = compact.replace("driveway", "Drive")
     return compact
+
+
+def _overview_zone_row_label(
+    zone_name: str,
+    controller_name: str | None,
+    profile: str,
+    application_rate: float | None,
+) -> str:
+    """Return the fixed dashboard row label for an overview zone row."""
+
+    return (
+        f"{_compact_zone_name(zone_name, controller_name)} · "
+        f"{_profile_summary_label(profile)} · "
+        f"{_application_rate_summary_label(application_rate)}"
+    )
+
+
+def _application_rate_summary_label(application_rate: float | None) -> str:
+    """Return a compact application-rate label for overview rows."""
+
+    if application_rate is None or application_rate <= 0:
+        return "needs calibration"
+    return f"{application_rate:.2f} in/hr"
 
 
 def _strip_zone_name_prefix(name: str, controller_name: str | None = None) -> str:
