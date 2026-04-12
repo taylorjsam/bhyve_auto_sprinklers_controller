@@ -496,13 +496,7 @@ class BhyveZoneQuickRunDurationNumber(
 
         super().__init__(entry, device_id, zone_number)
         self._attr_unique_id = f"{device_id}_{zone_number}_quick_run_duration"
-        zone = self.zone
-        initial_value = DEFAULT_QUICK_RUN_DURATION
-        if zone is not None and zone.quickrun_duration is not None:
-            initial_value = zone.quickrun_duration
-        elif zone is not None and zone.smart_duration is not None:
-            initial_value = zone.smart_duration
-        self._value = float(initial_value)
+        self._value = float(DEFAULT_QUICK_RUN_DURATION)
 
     async def async_added_to_hass(self) -> None:
         """Restore the previous quick-run duration if one exists."""
@@ -510,7 +504,9 @@ class BhyveZoneQuickRunDurationNumber(
         await super().async_added_to_hass()
         last_number_data = await self.async_get_last_number_data()
         if last_number_data is not None and last_number_data.native_value is not None:
-            self._value = last_number_data.native_value
+            self._value = self._restore_quick_run_duration(
+                float(last_number_data.native_value)
+            )
 
         self._store_runtime_value()
 
@@ -540,6 +536,18 @@ class BhyveZoneQuickRunDurationNumber(
         """Share the selected quick-run duration with the valve entities."""
 
         self._entry.runtime_data.quick_run_durations[self._duration_key] = int(self._value)
+
+    def _restore_quick_run_duration(self, restored_value: float) -> float:
+        """Restore user values while migrating the old one-minute B-hyve default."""
+
+        zone = self.zone
+        if (
+            round(restored_value) == 60
+            and zone is not None
+            and zone.quickrun_duration == 60
+        ):
+            return float(DEFAULT_QUICK_RUN_DURATION)
+        return restored_value
 
     @property
     def _duration_key(self) -> str:

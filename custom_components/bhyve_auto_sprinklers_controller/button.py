@@ -294,17 +294,9 @@ class BhyveSprinklerZoneButton(BhyveZoneCoordinatorEntity, ButtonEntity):
     def _get_quick_run_duration(self) -> int:
         """Return the selected quick-run duration in seconds."""
 
-        zone = self.zone
-        if zone is not None and zone.quickrun_duration is not None:
-            default_duration = zone.quickrun_duration
-        elif zone is not None and zone.smart_duration is not None:
-            default_duration = zone.smart_duration
-        else:
-            default_duration = DEFAULT_QUICK_RUN_DURATION
-
         return self._entry.runtime_data.quick_run_durations.get(
             self._duration_key,
-            default_duration,
+            DEFAULT_QUICK_RUN_DURATION,
         )
 
     @property
@@ -2301,17 +2293,29 @@ def _strip_zone_name_prefix(name: str, controller_name: str | None = None) -> st
 
     compact = name.strip()
     if not controller_name:
-        return compact
+        return _strip_generic_controller_prefix(compact)
 
-    prefix = controller_name.strip()
-    if not prefix:
-        return compact
+    for prefix in (controller_name.strip(), _strip_generic_controller_prefix(controller_name)):
+        if not prefix:
+            continue
+        if compact.casefold().startswith(prefix.casefold()):
+            stripped = compact[len(prefix) :].lstrip(" -–—:·")
+            if stripped:
+                return _strip_generic_controller_prefix(stripped)
+    return _strip_generic_controller_prefix(compact)
 
-    if compact.casefold().startswith(prefix.casefold()):
-        stripped = compact[len(prefix) :].lstrip(" -–—:·")
-        if stripped:
-            return stripped
-    return compact
+
+def _strip_generic_controller_prefix(name: str) -> str:
+    """Remove common B-hyve controller prefixes from a zone label."""
+
+    stripped = re.sub(
+        r"(?i)^b[\-\s\u2010-\u2015]?hyve\s+sprinkler\s+controller(?:\s+\d+)?\s+",
+        "",
+        name.strip(),
+    ).strip(" -–—:·")
+    if stripped:
+        return stripped
+    return name.strip()
 
 
 def _profile_summary_label(profile: str) -> str:

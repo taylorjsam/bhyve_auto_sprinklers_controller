@@ -94,6 +94,10 @@ class BhyveSprinklerZoneValve(BhyveZoneCoordinatorEntity, ValveEntity):
             "zone_id": zone.zone_id,
             "zone_number": zone.zone_number,
             "enabled": zone.enabled,
+            "quickrun_duration": self._entry.runtime_data.quick_run_durations.get(
+                self._duration_key,
+                DEFAULT_QUICK_RUN_DURATION,
+            ),
         }
         if zone.crop_type:
             attributes["crop_type"] = zone.crop_type
@@ -112,7 +116,7 @@ class BhyveSprinklerZoneValve(BhyveZoneCoordinatorEntity, ValveEntity):
         if zone.smart_duration is not None:
             attributes["smart_duration"] = zone.smart_duration
         if zone.quickrun_duration is not None:
-            attributes["quickrun_duration"] = zone.quickrun_duration
+            attributes["bhyve_native_quickrun_duration"] = zone.quickrun_duration
         if zone.latest_event is not None:
             if zone.latest_event.duration is not None:
                 attributes["last_duration"] = zone.latest_event.duration
@@ -135,16 +139,9 @@ class BhyveSprinklerZoneValve(BhyveZoneCoordinatorEntity, ValveEntity):
         if not zone.enabled:
             raise HomeAssistantError(f"Zone '{zone.name}' is disabled in B-hyve")
 
-        if zone.quickrun_duration is not None:
-            default_duration = zone.quickrun_duration
-        elif zone.smart_duration is not None:
-            default_duration = zone.smart_duration
-        else:
-            default_duration = DEFAULT_QUICK_RUN_DURATION
-
         duration = self._entry.runtime_data.quick_run_durations.get(
             self._duration_key,
-            default_duration,
+            DEFAULT_QUICK_RUN_DURATION,
         )
         await self.coordinator.async_quick_run_zone(
             self._device_id,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime, time as dt_time, timedelta, timezone
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -1975,17 +1976,29 @@ def _strip_zone_name_prefix(name: str, controller_name: str | None = None) -> st
 
     compact = name.strip()
     if not controller_name:
-        return compact
+        return _strip_generic_controller_prefix(compact)
 
-    prefix = controller_name.strip()
-    if not prefix:
-        return compact
+    for prefix in (controller_name.strip(), _strip_generic_controller_prefix(controller_name)):
+        if not prefix:
+            continue
+        if compact.casefold().startswith(prefix.casefold()):
+            stripped = compact[len(prefix) :].lstrip(" -–—:·")
+            if stripped:
+                return _strip_generic_controller_prefix(stripped)
+    return _strip_generic_controller_prefix(compact)
 
-    if compact.casefold().startswith(prefix.casefold()):
-        stripped = compact[len(prefix) :].lstrip(" -–—:·")
-        if stripped:
-            return stripped
-    return compact
+
+def _strip_generic_controller_prefix(name: str) -> str:
+    """Remove common B-hyve controller prefixes from a zone label."""
+
+    stripped = re.sub(
+        r"(?i)^b[\-\s\u2010-\u2015]?hyve\s+sprinkler\s+controller(?:\s+\d+)?\s+",
+        "",
+        name.strip(),
+    ).strip(" -–—:·")
+    if stripped:
+        return stripped
+    return name.strip()
 
 
 def _overview_profile_label(profile: str) -> str:
