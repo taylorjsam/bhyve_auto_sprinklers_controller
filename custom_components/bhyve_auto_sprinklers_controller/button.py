@@ -117,26 +117,28 @@ class BhyveExportDashboardTemplateButton(ButtonEntity):
     async def async_press(self) -> None:
         """Write populated dashboard files for every discovered controller."""
 
-        exported_paths: list[Path] = []
+        exported_dashboards: list[tuple[BhyveSprinklerControllerSnapshot, Path]] = []
         for controller in self._entry.runtime_data.coordinator.data.controllers:
-            exported_paths.append(
-                await _async_export_controller_dashboard(
-                    self.hass,
-                    self._entry,
-                    controller,
-                )
+            destination_path = await _async_export_controller_dashboard(
+                self.hass,
+                self._entry,
+                controller,
             )
+            exported_dashboards.append((controller, destination_path))
 
         persistent_notification.async_create(
             self.hass,
             (
                 "Exported populated dashboard files for the discovered sprinkler controllers:\n\n"
-                + "\n".join(f"- `{_relative_dashboard_path(self.hass, path)}`" for path in exported_paths)
+                + "\n".join(
+                    f"- `{_relative_dashboard_path(self.hass, path)}`"
+                    for _, path in exported_dashboards
+                )
                 + "\n\n"
                 "Home Assistant does not currently show a file-path field in the "
-                "dashboard picker for YAML dashboards. Add one of the exported files "
-                "to `configuration.yaml` under `lovelace: dashboards:` instead, then "
-                "restart Home Assistant."
+                "dashboard picker for YAML dashboards. Paste or merge this block into "
+                "`configuration.yaml`, then restart Home Assistant:\n\n"
+                f"```yaml\n{_dashboard_registration_block(self.hass, exported_dashboards)}\n```"
             ),
             title="B-hyve Auto Sprinklers Controller dashboards exported",
         )
@@ -213,9 +215,8 @@ class BhyveSprinklerExportDashboardButton(
                 f"Exported a ready-to-use dashboard for **{controller.nickname}** to "
                 f"`{_relative_dashboard_path(self.hass, destination_path)}`.\n\n"
                 "Home Assistant does not currently show a file-path field in the "
-                "dashboard picker for YAML dashboards. Add this block to "
-                "`configuration.yaml` under `lovelace: dashboards:` and restart Home "
-                "Assistant:\n\n"
+                "dashboard picker for YAML dashboards. Paste or merge this block into "
+                "`configuration.yaml`, then restart Home Assistant:\n\n"
                 f"```yaml\n{_dashboard_registration_snippet(self.hass, controller, destination_path)}\n```"
             ),
             title="B-hyve Auto Sprinklers Controller dashboard exported",
@@ -724,22 +725,45 @@ def _relative_dashboard_path(hass, destination_path: Path) -> str:
         return str(destination_path)
 
 
+def _dashboard_registration_block(
+    hass,
+    dashboards: list[tuple[BhyveSprinklerControllerSnapshot, Path]],
+) -> str:
+    """Return a complete Lovelace YAML registration block."""
+
+    entries = "\n".join(
+        _dashboard_registration_entry_snippet(hass, controller, destination_path)
+        for controller, destination_path in dashboards
+    )
+    return "lovelace:\n  mode: storage\n  dashboards:\n" + entries
+
+
+def _dashboard_registration_entry_snippet(
+    hass,
+    controller: BhyveSprinklerControllerSnapshot,
+    destination_path: Path,
+) -> str:
+    """Return one dashboard entry for the Lovelace registration block."""
+
+    return (
+        "    "
+        f"{_dashboard_registration_key(controller)}:\n"
+        "      mode: yaml\n"
+        f"      title: {json.dumps(controller.nickname or 'B-hyve Auto Sprinklers Controller')}\n"
+        "      icon: mdi:sprinkler\n"
+        "      show_in_sidebar: true\n"
+        f"      filename: {json.dumps(_relative_dashboard_path(hass, destination_path))}"
+    )
+
+
 def _dashboard_registration_snippet(
     hass,
     controller: BhyveSprinklerControllerSnapshot,
     destination_path: Path,
 ) -> str:
-    """Return the YAML snippet needed to register an exported dashboard."""
+    """Return the complete YAML snippet needed to register one dashboard."""
 
-    return (
-        "  "
-        f"{_dashboard_registration_key(controller)}:\n"
-        "    mode: yaml\n"
-        f"    title: {json.dumps(controller.nickname or 'B-hyve Auto Sprinklers Controller')}\n"
-        "    icon: mdi:sprinkler\n"
-        "    show_in_sidebar: true\n"
-        f"    filename: {json.dumps(_relative_dashboard_path(hass, destination_path))}"
-    )
+    return _dashboard_registration_block(hass, [(controller, destination_path)])
 
 
 def _slugify(value: str) -> str:
