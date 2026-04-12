@@ -1,0 +1,5 @@
+{
+  "name": "B-hyve Auto Sprinklers Controller Beta",
+  "domains": ["bhyve_auto_sprinklers_controller"],
+  "render_readme": true
+}

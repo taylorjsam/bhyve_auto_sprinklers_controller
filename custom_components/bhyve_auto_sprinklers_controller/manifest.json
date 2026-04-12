@@ -1,0 +1,11 @@
+{
+  "domain": "bhyve_auto_sprinklers_controller",
+  "name": "B-hyve Auto Sprinklers Controller",
+  "codeowners": ["@taylorjsam"],
+  "config_flow": true,
+  "documentation": "https://github.com/taylorjsam/bhyve_auto_sprinklers_controller#readme",
+  "integration_type": "hub",
+  "issue_tracker": "https://github.com/taylorjsam/bhyve_auto_sprinklers_controller/issues",
+  "iot_class": "cloud_polling",
+  "version": "0.1.1b"
+}

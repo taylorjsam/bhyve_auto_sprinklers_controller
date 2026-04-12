@@ -1,0 +1,156 @@
+# Replace the placeholder entity IDs in this file with your own entity IDs.
+# The easiest way is to open an entity in Home Assistant and copy the entity_id.
+#
+# Core controller entities used below:
+# - sensor.REPLACE_controller_irrigation_decision
+# - sensor.REPLACE_controller_rolling_deficit
+# - sensor.REPLACE_controller_next_watering_cycle
+# - sensor.REPLACE_controller_last_watering
+# - sensor.REPLACE_controller_suggested_watering_start
+# - sensor.REPLACE_controller_suggested_watering_end
+# - sensor.REPLACE_controller_active_watering_start
+# - sensor.REPLACE_controller_active_watering_end
+#
+# Weather entities used below:
+# - sensor.REPLACE_daily_rain
+# - sensor.bhyve_account_weekly_rain_7_day  (built-in, no replacement needed — find the exact entity ID under your B-hyve Account device)
+# - sensor.REPLACE_forecast_rain_amount
+# - sensor.REPLACE_forecast_rain_probability
+# - sensor.REPLACE_current_temperature
+# - sensor.REPLACE_current_uv_index
+#
+# Zone entities used below:
+# - valve.REPLACE_zone_1
+# - valve.REPLACE_zone_2
+# - valve.REPLACE_zone_3
+# - sensor.REPLACE_zone_1_recommended_runtime
+# - sensor.REPLACE_zone_2_recommended_runtime
+# - sensor.REPLACE_zone_3_recommended_runtime
+# - number.REPLACE_zone_1_application_rate
+# - number.REPLACE_zone_2_application_rate
+# - number.REPLACE_zone_3_application_rate
+# - number.REPLACE_zone_1_max_weekly_runtime
+# - number.REPLACE_zone_2_max_weekly_runtime
+# - number.REPLACE_zone_3_max_weekly_runtime
+
+title: B-hyve Auto Sprinklers Controller
+views:
+  - title: Overview
+    path: overview
+    icon: mdi:sprinkler-variant
+    cards:
+      - type: markdown
+        content: |
+          # B-hyve Auto Sprinklers Controller
+          This dashboard shows current demand, the projected next cycle, and recent watering history.
+          Replace the placeholder entity IDs in this YAML with your actual entities.
+
+      - type: grid
+        columns: 4
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.REPLACE_controller_irrigation_decision
+            name: Planner decision
+          - type: tile
+            entity: sensor.REPLACE_controller_rolling_deficit
+            name: Rolling deficit
+          - type: tile
+            entity: sensor.REPLACE_controller_next_watering_cycle
+            name: Next cycle
+          - type: tile
+            entity: sensor.REPLACE_controller_last_watering
+            name: Last watering
+
+      - type: entities
+        title: Watering Window
+        show_header_toggle: false
+        entities:
+          - entity: sensor.REPLACE_controller_suggested_watering_start
+            name: Suggested start
+          - entity: sensor.REPLACE_controller_suggested_watering_end
+            name: Suggested end
+          - entity: sensor.REPLACE_controller_active_watering_start
+            name: Active start
+          - entity: sensor.REPLACE_controller_active_watering_end
+            name: Active end
+
+      - type: entities
+        title: Weather Inputs
+        show_header_toggle: false
+        entities:
+          - entity: sensor.REPLACE_daily_rain
+            name: Daily rain
+          - entity: sensor.bhyve_account_weekly_rain_7_day
+            name: Weekly rain (7-day)
+          - entity: sensor.REPLACE_forecast_rain_amount
+            name: Forecast rain amount
+          - entity: sensor.REPLACE_forecast_rain_probability
+            name: Forecast rain probability
+          - entity: sensor.REPLACE_current_temperature
+            name: Current temperature
+          - entity: sensor.REPLACE_current_uv_index
+            name: Current UV index
+
+      - type: markdown
+        content: |
+          {% set cycle = states('sensor.REPLACE_controller_next_watering_cycle') %}
+          {% set attrs = state_attr('sensor.REPLACE_controller_next_watering_cycle', 'projected_zone_runs') or [] %}
+          ## Projected Next Cycle
+          {% if cycle in ['unavailable', 'unknown', 'none', 'not_scheduled', 'not_configured'] %}
+          No projected watering cycle is currently scheduled.
+          {% else %}
+          **Start:** {{ state_attr('sensor.REPLACE_controller_next_watering_cycle', 'projected_start_local') }}
+          **End:** {{ state_attr('sensor.REPLACE_controller_next_watering_cycle', 'projected_end_local') }}
+          **Status:** {{ state_attr('sensor.REPLACE_controller_next_watering_cycle', 'status') }}
+
+          {% for item in attrs %}
+          - **{{ item.zone_name }}**: {{ item.runtime_minutes }} min{% if item.cycle_minutes %} (cycles: {{ item.cycle_minutes | join(', ') }}){% endif %}
+          {% endfor %}
+          {% endif %}
+
+      - type: markdown
+        content: |
+          {% set events = state_attr('sensor.REPLACE_controller_last_watering', 'recent_events') or [] %}
+          ## Recent Watering
+          {% if events %}
+          {% for event in events[:15] %}
+          - **{{ event.end_local }}**: {{ event.zone_name }} for {{ event.duration_minutes }} min{% if event.schedule_type %} ({{ event.schedule_type | lower }}){% endif %}
+          {% endfor %}
+          {% else %}
+          No recent watering events found.
+          {% endif %}
+
+      - type: history-graph
+        title: Valve History - Last 3 Weeks
+        hours_to_show: 504
+        entities:
+          - entity: valve.REPLACE_zone_1
+            name: Zone 1
+          - entity: valve.REPLACE_zone_2
+            name: Zone 2
+          - entity: valve.REPLACE_zone_3
+            name: Zone 3
+
+      - type: entities
+        title: Zone Runtime Plan
+        show_header_toggle: false
+        entities:
+          - entity: sensor.REPLACE_zone_1_recommended_runtime
+            name: Zone 1 recommended runtime
+          - entity: sensor.REPLACE_zone_2_recommended_runtime
+            name: Zone 2 recommended runtime
+          - entity: sensor.REPLACE_zone_3_recommended_runtime
+            name: Zone 3 recommended runtime
+          - entity: number.REPLACE_zone_1_application_rate
+            name: Zone 1 application rate
+          - entity: number.REPLACE_zone_2_application_rate
+            name: Zone 2 application rate
+          - entity: number.REPLACE_zone_3_application_rate
+            name: Zone 3 application rate
+          - entity: number.REPLACE_zone_1_max_weekly_runtime
+            name: Zone 1 max weekly runtime
+          - entity: number.REPLACE_zone_2_max_weekly_runtime
+            name: Zone 2 max weekly runtime
+          - entity: number.REPLACE_zone_3_max_weekly_runtime
+            name: Zone 3 max weekly runtime

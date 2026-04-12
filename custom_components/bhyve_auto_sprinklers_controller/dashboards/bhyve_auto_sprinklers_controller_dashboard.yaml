@@ -1,0 +1,194 @@
+# Reference template only.
+# Use the integration's "Export dashboard" button on a sprinkler controller
+# (or "Export all dashboards" on the B-hyve Account device) to generate a
+# ready-to-use YAML dashboard with live entity IDs already filled in.
+#
+# This reference mirrors the exported structure:
+# - Overview
+# - Zones
+# - Settings
+#
+# The live export also shows a per-zone weekly runtime summary on Overview
+# and adds one zone-specific deficit graph per zone on the Zones page.
+# Each zone exposes a simple 15-minute calibration button; the generated
+# dashboard confirmation explains the tuna-can method before the run starts.
+
+title: B-hyve Auto Sprinklers Controller
+views:
+  - title: Overview
+    path: overview
+    icon: mdi:sprinkler-variant
+    type: masonry
+    cards:
+      - type: markdown
+        content: |
+          # Sprinklers
+
+          Planner, weather, and automation at a glance.
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.REPLACE_controller_api_status
+            name: API
+          - type: tile
+            entity: sensor.REPLACE_controller_irrigation_decision
+            name: Plan
+          - type: tile
+            entity: sensor.REPLACE_controller_average_zone_deficit
+            name: Avg deficit
+          - type: tile
+            entity: sensor.REPLACE_effective_rain_24h
+            name: Effective 24h
+          - type: tile
+            entity: sensor.REPLACE_forecast_rain_next_24h
+            name: Forecast 24h
+          - type: tile
+            entity: sensor.REPLACE_controller_last_watering
+            name: Last watering
+      - type: markdown
+        content: |
+          ## Zones
+
+          Replace this summary block with the generated export if you want the compact live zone rows.
+      - type: markdown
+        content: |
+          ## Automation
+
+          Replace this block with the generated export if you want the styled actions and planner guard rails.
+      - type: markdown
+        content: |
+          ### Time Watered This Week by Zone
+
+          - **Front Strip** — 12 min
+          - **Front Drive** — 18 min
+          - **Back Garden** — 24 min
+
+  - title: Zones
+    path: zones
+    icon: mdi:sprinkler
+    type: masonry
+    cards:
+      - type: markdown
+        content: |
+          # Zone Details
+
+          Per-zone valve state, deficit history, and runtime tuning.
+      - type: vertical-stack
+        cards:
+          - type: markdown
+            content: |
+              ## Zone 1
+              Example zone card
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: valve.REPLACE_zone_1
+                name: Valve
+              - type: tile
+                entity: sensor.REPLACE_zone_1_recommended_runtime
+                name: Recommended
+              - type: tile
+                entity: sensor.REPLACE_zone_1_deficit
+                name: Deficit
+              - type: tile
+                entity: select.REPLACE_zone_1_profile
+                name: Profile
+              - type: tile
+                entity: select.REPLACE_zone_1_sprinkler_head_type
+                name: Sprinkler head type
+              - type: tile
+                entity: number.REPLACE_zone_1_application_rate
+                name: Application rate
+              - type: tile
+                entity: number.REPLACE_zone_1_max_weekly_runtime
+                name: Max weekly
+              - type: tile
+                entity: sensor.REPLACE_zone_1_runtime_this_week
+                name: This week
+          - type: history-graph
+            title: Deficit - Last 7 Days
+            hours_to_show: 168
+            entities:
+              - entity: sensor.REPLACE_zone_1_deficit
+                name: Deficit
+
+  - title: Settings
+    path: settings
+    icon: mdi:tune-variant
+    type: masonry
+    cards:
+      - type: markdown
+        content: |
+          # Settings
+
+          Automation, planner controls, and source assignment.
+      - type: grid
+        columns: 1
+        square: false
+        cards:
+          - type: tile
+            entity: switch.REPLACE_automatic_watering
+            name: Auto watering
+          - type: tile
+            entity: switch.REPLACE_notifications_enabled
+            name: Notifications
+          - type: tile
+            entity: switch.REPLACE_automatic_watering_window
+            name: Use auto window
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: tile
+            entity: select.REPLACE_notification_target
+            name: Notification target
+          - type: tile
+            entity: number.REPLACE_overall_watering_coefficient
+            name: Overall multiplier
+          - type: tile
+            entity: number.REPLACE_minimum_run_threshold
+            name: Minimum runtime
+          - type: tile
+            entity: number.REPLACE_max_wind_speed
+            name: Max wind
+          - type: tile
+            entity: number.REPLACE_minimum_temperature
+            name: Min temperature
+          - type: tile
+            entity: time.REPLACE_manual_window_start
+            name: Manual start
+          - type: tile
+            entity: time.REPLACE_manual_window_end
+            name: Manual end
+      - type: markdown
+        content: |
+          ## Zone application rates
+
+          Replace this block with the generated export to see every zone's live
+          application rate and recalibration buttons.
+      - type: grid
+        columns: 1
+        square: false
+        cards:
+          - type: tile
+            entity: select.REPLACE_daily_rain_source
+            name: Daily rain source
+          - type: tile
+            entity: select.REPLACE_forecast_weather_source
+            name: Forecast source
+          - type: tile
+            entity: select.REPLACE_temperature_source
+            name: Temperature source
+          - type: tile
+            entity: select.REPLACE_humidity_source
+            name: Humidity source
+          - type: tile
+            entity: select.REPLACE_uv_source
+            name: UV source
+          - type: tile
+            entity: select.REPLACE_wind_source
+            name: Wind source

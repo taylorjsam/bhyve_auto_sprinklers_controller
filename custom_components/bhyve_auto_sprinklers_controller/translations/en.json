@@ -1,0 +1,67 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This B-hyve account is already configured.",
+      "reconfigure_successful": "The B-hyve Auto Sprinklers Controller settings were updated successfully.",
+      "reauth_successful": "The B-hyve account was reconnected successfully.",
+      "wrong_account": "Reauthentication must use the same B-hyve account."
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to B-hyve.",
+      "invalid_auth": "Invalid B-hyve credentials.",
+      "no_controllers": "No B-hyve sprinkler controllers were found on this account.",
+      "controller_not_found": "The configured B-hyve controller ID was not found on this account.",
+      "unknown": "Unexpected error."
+    },
+    "step": {
+      "user": {
+        "title": "Connect to B-hyve",
+        "description": "Enter your B-hyve email and password to connect your sprinkler account.",
+        "data": {
+          "username": "Email",
+          "password": "Password",
+          "controller_device_id": "Controller device ID (optional)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect to B-hyve",
+        "description": "Your B-hyve session needs updated credentials. Enter them below.",
+        "data": {
+          "username": "Email",
+          "password": "Password",
+          "controller_device_id": "Controller device ID (optional)"
+        }
+      },
+      "reconfigure": {
+        "title": "Sprinkler Settings",
+        "description": "Adjust the optional controller device ID and planner location overrides. Weather sources and notification target stay on the B-hyve Account device configuration card.",
+        "data": {
+          "controller_device_id": "Controller device ID (optional)",
+          "planner_latitude": "Planner latitude override",
+          "planner_longitude": "Planner longitude override"
+        },
+        "data_description": {
+          "controller_device_id": "Optional: pin the integration to a specific B-hyve sprinkler controller device ID if your account has more than one controller.",
+          "planner_latitude": "Optional: override Home Assistant's latitude for ET and watering-window calculations. Set both latitude and longitude or leave both blank to use your HA home location.",
+          "planner_longitude": "Optional: override Home Assistant's longitude for sunrise-based watering-window calculations. Set both latitude and longitude or leave both blank to use your HA home location."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Planner Location",
+        "description": "Set optional planner latitude and longitude overrides. Configure weather-source entities and the notification target from the B-hyve Account device configuration card.",
+        "data": {
+          "planner_latitude": "Planner latitude override",
+          "planner_longitude": "Planner longitude override"
+        },
+        "data_description": {
+          "planner_latitude": "Optional: override Home Assistant's latitude for ET and watering-window calculations. Set both latitude and longitude or leave both blank to use your HA home location.",
+          "planner_longitude": "Optional: override Home Assistant's longitude for sunrise-based watering-window calculations. Set both latitude and longitude or leave both blank to use your HA home location."
+        }
+      }
+    }
+  }
+}

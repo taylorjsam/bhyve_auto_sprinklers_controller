@@ -1,0 +1,63 @@
+quick_run_zone:
+  name: Quick run zone
+  description: Start a quick run on a specific B-hyve sprinkler zone.
+  fields:
+    device_id:
+      name: Device ID
+      description: B-hyve sprinkler controller device ID.
+      required: true
+      selector:
+        text:
+    zone_number:
+      name: Zone number
+      description: Zone number to run.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: box
+          step: 1
+    duration:
+      name: Duration
+      description: Quick-run duration in seconds.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 7200
+          mode: box
+          step: 1
+
+stop_watering:
+  name: Stop watering
+  description: Stop the currently running quick run or schedule on a controller.
+  fields:
+    device_id:
+      name: Device ID
+      description: B-hyve sprinkler controller device ID.
+      required: true
+      selector:
+        text:
+
+refresh_zones:
+  name: Refresh zones
+  description: Refresh sprinkler zones from the B-hyve irrigation API.
+  fields:
+    device_id:
+      name: Device ID
+      description: B-hyve sprinkler controller device ID.
+      required: true
+      selector:
+        text:
+
+recalculate_plan:
+  name: Recalculate irrigation plan
+  description: Recompute the rolling water balance and zone recommendations for a controller.
+  fields:
+    device_id:
+      name: Device ID
+      description: B-hyve sprinkler controller device ID.
+      required: true
+      selector:
+        text:
