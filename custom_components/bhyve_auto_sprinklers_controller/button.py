@@ -575,7 +575,7 @@ class BhyveSprinklerEvaluatePlanButton(
             raise HomeAssistantError("Sprinkler controller is not available")
 
         await _async_refresh_controller_plan(self._entry, self._device_id)
-        await _async_maybe_send_plan_notification(self._entry, self._device_id)
+        await async_maybe_send_plan_notification(self._entry, self._device_id)
 
 
 class BhyveSprinklerWaterNowButton(
@@ -950,7 +950,7 @@ def _build_controller_dashboard_text(
         zone_dashboard_data.append(
             {
                 "name": zone.name,
-                "label": _compact_zone_name(zone.name),
+                "label": _compact_zone_name(zone.name, controller.nickname),
                 "zone_number": zone.zone_number,
                 "runtime_key": f"{controller.device_id}:{zone.zone_number}",
                 "valve": valve_entity,
@@ -2284,14 +2284,33 @@ def _weekly_runtime_markdown_lines(
     ]
 
 
-def _compact_zone_name(name: str) -> str:
+def _compact_zone_name(name: str, controller_name: str | None = None) -> str:
     """Return a shorter display label for overview tables."""
 
-    compact = name.replace("Front yard ", "Front ")
+    compact = _strip_zone_name_prefix(name, controller_name)
+    compact = compact.replace("Front yard ", "Front ")
     compact = compact.replace("Backyard ", "Back ")
     compact = compact.replace("(", "").replace(")", "")
     compact = compact.replace("Middle-strip", "Middle")
     compact = compact.replace("driveway", "Drive")
+    return compact
+
+
+def _strip_zone_name_prefix(name: str, controller_name: str | None = None) -> str:
+    """Remove the controller name from B-hyve zone labels when it is duplicated."""
+
+    compact = name.strip()
+    if not controller_name:
+        return compact
+
+    prefix = controller_name.strip()
+    if not prefix:
+        return compact
+
+    if compact.casefold().startswith(prefix.casefold()):
+        stripped = compact[len(prefix) :].lstrip(" -–—:·")
+        if stripped:
+            return stripped
     return compact
 
 

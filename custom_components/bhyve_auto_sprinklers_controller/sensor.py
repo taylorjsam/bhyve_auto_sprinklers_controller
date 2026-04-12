@@ -1229,8 +1229,10 @@ class BhyveZoneOverviewRuntimeSensor(BhyveZonePlanCoordinatorEntity, SensorEntit
         zone_plan = self.zone_plan
         if zone_plan is None:
             return f"Zone {self._zone_number} · loading"
+        controller_plan = self.controller_plan
+        controller_name = controller_plan.nickname if controller_plan is not None else None
         return (
-            f"{_compact_zone_name(zone_plan.zone_name)} · "
+            f"{_compact_zone_name(zone_plan.zone_name, controller_name)} · "
             f"{_overview_profile_label(zone_plan.watering_profile)} · "
             f"{_overview_application_rate_label(zone_plan.application_rate_inches_per_hour)}"
         )
@@ -1251,9 +1253,11 @@ class BhyveZoneOverviewRuntimeSensor(BhyveZonePlanCoordinatorEntity, SensorEntit
         zone_plan = self.zone_plan
         if zone_plan is None:
             return {}
+        controller_plan = self.controller_plan
+        controller_name = controller_plan.nickname if controller_plan is not None else None
         return {
             "zone_name": zone_plan.zone_name,
-            "compact_zone_name": _compact_zone_name(zone_plan.zone_name),
+            "compact_zone_name": _compact_zone_name(zone_plan.zone_name, controller_name),
             "watering_profile": zone_plan.watering_profile,
             "application_rate_inches_per_hour": zone_plan.application_rate_inches_per_hour,
             "application_rate_configured": zone_plan.application_rate_configured,
@@ -1954,14 +1958,33 @@ def _parse_time_string(value: str | None) -> dt_time | None:
         return None
 
 
-def _compact_zone_name(name: str) -> str:
+def _compact_zone_name(name: str, controller_name: str | None = None) -> str:
     """Return a compact zone label for dashboard summary rows."""
 
-    compact = name.replace("Front yard ", "Front ")
+    compact = _strip_zone_name_prefix(name, controller_name)
+    compact = compact.replace("Front yard ", "Front ")
     compact = compact.replace("Backyard ", "Back ")
     compact = compact.replace("(", "").replace(")", "")
     compact = compact.replace("Middle-strip", "Middle")
     compact = compact.replace("driveway", "Drive")
+    return compact
+
+
+def _strip_zone_name_prefix(name: str, controller_name: str | None = None) -> str:
+    """Remove the controller name from B-hyve zone labels when it is duplicated."""
+
+    compact = name.strip()
+    if not controller_name:
+        return compact
+
+    prefix = controller_name.strip()
+    if not prefix:
+        return compact
+
+    if compact.casefold().startswith(prefix.casefold()):
+        stripped = compact[len(prefix) :].lstrip(" -–—:·")
+        if stripped:
+            return stripped
     return compact
 
 
