@@ -1002,7 +1002,6 @@ def _build_controller_dashboard_text(
             (api_status_entity, "API"),
             (decision_entity, "Plan"),
             (deficit_entity, "Avg deficit"),
-            (forecast_rain_sensor, "Forecast 24h"),
             (last_watering_entity, "Last watering"),
         ],
         columns=2,

@@ -42,9 +42,6 @@ views:
             entity: sensor.REPLACE_effective_rain_24h
             name: Effective 24h
           - type: tile
-            entity: sensor.REPLACE_forecast_rain_next_24h
-            name: Forecast 24h
-          - type: tile
             entity: sensor.REPLACE_controller_last_watering
             name: Last watering
       - type: markdown

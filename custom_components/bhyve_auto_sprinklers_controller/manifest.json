@@ -7,5 +7,5 @@
   "integration_type": "hub",
   "issue_tracker": "https://github.com/taylorjsam/bhyve_auto_sprinklers_controller/issues",
   "iot_class": "cloud_polling",
-  "version": "0.1.1b6"
+  "version": "0.1.1b7"
 }
