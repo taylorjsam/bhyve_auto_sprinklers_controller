@@ -2777,37 +2777,110 @@ def build_controller_plan(
     window_rotation_applied = False
     if decision == "run" and total_requested_runtime_minutes > available_window_minutes:
         window_rotation_applied = True
-        remaining_window_minutes = available_window_minutes
-        eligible_zone_data = sorted(
-            (
-                zone_data
-                for zone_data in zone_runtime_data
-                if int(zone_data["requested_runtime_minutes"]) > 0
-            ),
-            key=lambda zone_data: _zone_window_priority(
-                zone_data["zone"],
-                now_local=now_local,
-                vegetable_garden_mode=bool(zone_data["vegetable_garden_mode"]),
-                water_efficient_mode=bool(zone_data["water_efficient_mode"]),
-                trees_shrubs_mode=bool(zone_data["trees_shrubs_mode"]),
-                last_run_age_days=zone_data["days_since_last_watering"],
-                recent_runtime_minutes_7d=int(zone_data["recent_runtime_minutes_7d"]),
-            ),
-        )
-        for zone_data in eligible_zone_data:
-            requested_runtime = int(zone_data["requested_runtime_minutes"])
-            if requested_runtime <= 0:
-                continue
-            if requested_runtime <= remaining_window_minutes:
-                remaining_window_minutes -= requested_runtime
-                continue
-            zone_data["scheduled_runtime_minutes"] = 0
-            zone_data["deferred_by_window_limit"] = True
-            zone_data["reason"] = (
-                f"{zone_data['reason']} It will rotate into a later watering cycle because the current watering window is full."
+        eligible_zone_data = [
+            zone_data
+            for zone_data in zone_runtime_data
+            if int(zone_data["requested_runtime_minutes"]) > 0
+        ]
+        if not automatic_window_enabled and eligible_zone_data:
+            share_rows = []
+            for zone_data in eligible_zone_data:
+                requested_runtime = int(zone_data["requested_runtime_minutes"])
+                raw_share = (
+                    requested_runtime
+                    * max(0, available_window_minutes)
+                    / max(1, total_requested_runtime_minutes)
+                )
+                share_rows.append(
+                    {
+                        "zone_data": zone_data,
+                        "requested_runtime": requested_runtime,
+                        "raw_share": raw_share,
+                        "allocated_runtime": min(
+                            requested_runtime,
+                            int(raw_share),
+                        ),
+                    }
+                )
+
+            if available_window_minutes >= len(share_rows):
+                for row in share_rows:
+                    if int(row["requested_runtime"]) > 0:
+                        row["allocated_runtime"] = max(
+                            1,
+                            int(row["allocated_runtime"]),
+                        )
+
+            allocated_minutes = sum(int(row["allocated_runtime"]) for row in share_rows)
+            while allocated_minutes > available_window_minutes:
+                reducible_rows = [
+                    row for row in share_rows if int(row["allocated_runtime"]) > 1
+                ]
+                if not reducible_rows:
+                    break
+                row = max(
+                    reducible_rows,
+                    key=lambda item: int(item["allocated_runtime"]) - float(item["raw_share"]),
+                )
+                row["allocated_runtime"] = int(row["allocated_runtime"]) - 1
+                allocated_minutes -= 1
+
+            while allocated_minutes < available_window_minutes:
+                expandable_rows = [
+                    row
+                    for row in share_rows
+                    if int(row["allocated_runtime"]) < int(row["requested_runtime"])
+                ]
+                if not expandable_rows:
+                    break
+                row = max(
+                    expandable_rows,
+                    key=lambda item: float(item["raw_share"]) - int(item["allocated_runtime"]),
+                )
+                row["allocated_runtime"] = int(row["allocated_runtime"]) + 1
+                allocated_minutes += 1
+
+            for row in share_rows:
+                zone_data = row["zone_data"]
+                requested_runtime = int(row["requested_runtime"])
+                allocated_runtime = int(row["allocated_runtime"])
+                zone_data["scheduled_runtime_minutes"] = allocated_runtime
+                if allocated_runtime < requested_runtime:
+                    zone_data["deferred_by_window_limit"] = True
+                    zone_data["reason"] = (
+                        f"{zone_data['reason']} The custom watering window is shorter than the ideal plan, so this zone is getting a proportional share."
+                    )
+            automatic_window_reason = (
+                f"{automatic_window_reason}; custom window is shorter than ideal runtime, so due zones share the available time proportionally"
             )
-        automatic_window_reason = (
-            f"{automatic_window_reason}; lower-priority due zones rotate into later cycles when demand exceeds the active watering window"
+        else:
+            remaining_window_minutes = available_window_minutes
+            eligible_zone_data = sorted(
+                eligible_zone_data,
+                key=lambda zone_data: _zone_window_priority(
+                    zone_data["zone"],
+                    now_local=now_local,
+                    vegetable_garden_mode=bool(zone_data["vegetable_garden_mode"]),
+                    water_efficient_mode=bool(zone_data["water_efficient_mode"]),
+                    trees_shrubs_mode=bool(zone_data["trees_shrubs_mode"]),
+                    last_run_age_days=zone_data["days_since_last_watering"],
+                    recent_runtime_minutes_7d=int(zone_data["recent_runtime_minutes_7d"]),
+                ),
+            )
+            for zone_data in eligible_zone_data:
+                requested_runtime = int(zone_data["requested_runtime_minutes"])
+                if requested_runtime <= 0:
+                    continue
+                if requested_runtime <= remaining_window_minutes:
+                    remaining_window_minutes -= requested_runtime
+                    continue
+                zone_data["scheduled_runtime_minutes"] = 0
+                zone_data["deferred_by_window_limit"] = True
+                zone_data["reason"] = (
+                    f"{zone_data['reason']} It will rotate into a later watering cycle because the current watering window is full."
+                )
+            automatic_window_reason = (
+                f"{automatic_window_reason}; lower-priority due zones rotate into later cycles when demand exceeds the active watering window"
         )
 
     zone_plans: list[BhyveZonePlan] = []

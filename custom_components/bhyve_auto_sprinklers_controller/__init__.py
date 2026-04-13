@@ -174,6 +174,7 @@ async def async_setup_entry(
         water_balance_store,
     )
     entry.runtime_data.plan_coordinator = plan_coordinator
+    entry.async_on_unload(plan_coordinator.async_clear_automatic_run_schedules)
     if stored_runtime_config_snapshot:
         await plan_coordinator.async_config_entry_first_refresh()
     entry.async_on_unload(

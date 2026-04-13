@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 import logging
 from typing import Any
 
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -95,6 +97,10 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
         self._daily_rain_rollover_baseline_inches: float | None = None
         self._last_daily_rain_source_date: date | None = None
         self._last_daily_rain_source_value: float | None = None
+        self._force_authoritative_et_date: date | None = None
+        self._automatic_run_unsubscribers: dict[str, Callable[[], None]] = {}
+        self._automatic_schedule_tokens: dict[str, str] = {}
+        self._automatic_run_in_progress: set[str] = set()
 
     async def _async_update_data(self) -> BhyveIrrigationPlanSnapshot:
         """Build the current planning snapshot from live data and persisted weather."""
@@ -180,6 +186,9 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             wind_speed_mph,
             solar_radiation_w_m2,
         )
+        if self._force_authoritative_et_date == now_local.date():
+            accumulated_et_today_inches = _final_et_today_inches
+
         for controller in irrigation_snapshot.controllers:
             daily_records = self._load_daily_records(controller.device_id)
             today_record = self._get_daily_record(
@@ -364,6 +373,7 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             latitude=latitude,
             longitude=longitude,
         )
+        self._async_schedule_automatic_runs(snapshot, now_local)
         return snapshot
 
     async def async_refresh_for_sunset_notification(
@@ -373,6 +383,12 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
         """Refresh the plan at sunset and send the daily summary immediately."""
 
         try:
+            local_event_time = (
+                dt_util.as_local(event_time)
+                if event_time is not None
+                else dt_util.now()
+            )
+            self._force_authoritative_et_date = local_event_time.date()
             await self.async_request_refresh()
         except Exception:
             _LOGGER.warning(
@@ -380,16 +396,14 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 exc_info=True,
             )
             return
+        finally:
+            self._force_authoritative_et_date = None
 
         snapshot = self.data
         if snapshot is None:
             return
 
-        now_local = (
-            dt_util.as_local(event_time)
-            if event_time is not None
-            else dt_util.now()
-        )
+        now_local = local_event_time
         latitude, longitude, _location_source = self._resolve_planner_location()
         await async_maybe_send_post_sunset_plan_notifications(
             self._entry,
@@ -398,6 +412,237 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             latitude=latitude,
             longitude=longitude,
             force=True,
+        )
+
+    def async_clear_automatic_run_schedules(self) -> None:
+        """Cancel pending automatic watering callbacks for this entry."""
+
+        for device_id in list(self._automatic_run_unsubscribers):
+            self._clear_automatic_run_schedule(device_id)
+        self._automatic_schedule_tokens.clear()
+
+    def _async_schedule_automatic_runs(
+        self,
+        snapshot: BhyveIrrigationPlanSnapshot,
+        now_local: datetime,
+    ) -> None:
+        """Schedule automatic runs from the current planner snapshot."""
+
+        if not self._entry.runtime_data.automatic_watering_enabled:
+            self.async_clear_automatic_run_schedules()
+            return
+
+        active_device_ids: set[str] = set()
+        for controller_plan in snapshot.controllers:
+            device_id = controller_plan.device_id
+            active_device_ids.add(device_id)
+            if device_id in self._automatic_run_in_progress:
+                continue
+
+            zone_runs = self._zone_runs_for_plan(controller_plan)
+            window = self._automatic_run_window(controller_plan)
+            if controller_plan.decision != "run" or not zone_runs or window is None:
+                self._clear_automatic_run_schedule(device_id)
+                continue
+
+            start_dt, end_dt = window
+            if end_dt <= now_local:
+                self._clear_automatic_run_schedule(device_id)
+                continue
+
+            run_token = self._automatic_run_token(controller_plan, start_dt, zone_runs)
+            if self._entry.runtime_data.automatic_run_tokens.get(device_id) == run_token:
+                self._clear_automatic_run_schedule(device_id)
+                continue
+
+            self._schedule_automatic_run_at(
+                controller_plan=controller_plan,
+                schedule_time=max(start_dt, now_local),
+                run_token=run_token,
+            )
+
+        for device_id in list(self._automatic_run_unsubscribers):
+            if device_id not in active_device_ids:
+                self._clear_automatic_run_schedule(device_id)
+
+    def _schedule_automatic_run_at(
+        self,
+        *,
+        controller_plan,
+        schedule_time: datetime,
+        run_token: str,
+    ) -> None:
+        """Schedule one controller's next automatic run."""
+
+        device_id = controller_plan.device_id
+        if self._automatic_schedule_tokens.get(device_id) == run_token:
+            return
+
+        self._clear_automatic_run_schedule(device_id)
+        self._automatic_schedule_tokens[device_id] = run_token
+
+        if schedule_time <= dt_util.now() + timedelta(seconds=1):
+            self.hass.async_create_task(
+                self._async_run_scheduled_automatic_cycle(device_id, run_token)
+            )
+            return
+
+        @callback
+        def _async_handle_automatic_run(_now: datetime) -> None:
+            self.hass.async_create_task(
+                self._async_run_scheduled_automatic_cycle(device_id, run_token)
+            )
+
+        self._automatic_run_unsubscribers[device_id] = async_track_point_in_utc_time(
+            self.hass,
+            _async_handle_automatic_run,
+            dt_util.as_utc(schedule_time),
+        )
+
+        _LOGGER.debug(
+            "Scheduled automatic watering for %s at %s",
+            controller_plan.nickname,
+            schedule_time.isoformat(),
+        )
+
+    async def _async_run_scheduled_automatic_cycle(
+        self,
+        device_id: str,
+        expected_token: str,
+    ) -> None:
+        """Refresh the plan at the scheduled window start and run due zones."""
+
+        if self._automatic_schedule_tokens.get(device_id) != expected_token:
+            return
+        self._clear_automatic_run_schedule(device_id)
+
+        if device_id in self._automatic_run_in_progress:
+            return
+        self._automatic_run_in_progress.add(device_id)
+        try:
+            if not self._entry.runtime_data.automatic_watering_enabled:
+                return
+            if self._entry.runtime_data.automatic_run_tokens.get(device_id) == expected_token:
+                return
+
+            coordinator = self._entry.runtime_data.coordinator
+            controller = coordinator.get_controller(device_id)
+            if controller is not None and controller.active_run is not None:
+                _LOGGER.info(
+                    "Skipping automatic watering for %s because watering is already active",
+                    controller.nickname,
+                )
+                return
+
+            try:
+                await coordinator.async_request_refresh()
+                controller = coordinator.get_controller(device_id)
+                if controller is not None and controller.active_run is not None:
+                    _LOGGER.info(
+                        "Skipping automatic watering for %s because watering is already active",
+                        controller.nickname,
+                    )
+                    return
+                await self.async_request_refresh()
+            except Exception:
+                _LOGGER.warning(
+                    "Unable to refresh the irrigation plan for automatic watering",
+                    exc_info=True,
+                )
+                return
+
+            controller_plan = self.get_controller_plan(device_id)
+            if controller_plan is None or controller_plan.decision != "run":
+                return
+
+            window = self._automatic_run_window(controller_plan)
+            if window is None:
+                return
+            start_dt, end_dt = window
+            now_local = dt_util.now()
+            if now_local < start_dt:
+                self._schedule_automatic_run_at(
+                    controller_plan=controller_plan,
+                    schedule_time=start_dt,
+                    run_token=self._automatic_run_token(
+                        controller_plan,
+                        start_dt,
+                        self._zone_runs_for_plan(controller_plan),
+                    ),
+                )
+                return
+            if now_local > end_dt:
+                return
+
+            zone_runs = self._zone_runs_for_plan(controller_plan)
+            if not zone_runs:
+                return
+            run_token = self._automatic_run_token(controller_plan, start_dt, zone_runs)
+            if self._entry.runtime_data.automatic_run_tokens.get(device_id) == run_token:
+                return
+
+            try:
+                await coordinator.async_run_zone_sequence(
+                    device_id,
+                    zone_runs,
+                    source="automatic_window",
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Unable to start the automatic watering run for %s",
+                    controller_plan.nickname,
+                    exc_info=True,
+                )
+                return
+
+            self._entry.runtime_data.automatic_run_tokens[device_id] = run_token
+        finally:
+            self._automatic_run_in_progress.discard(device_id)
+
+    def _clear_automatic_run_schedule(self, device_id: str) -> None:
+        """Cancel a pending automatic watering callback for one controller."""
+
+        unsub = self._automatic_run_unsubscribers.pop(device_id, None)
+        if unsub is not None:
+            unsub()
+        self._automatic_schedule_tokens.pop(device_id, None)
+
+    @staticmethod
+    def _zone_runs_for_plan(controller_plan) -> list[tuple[int, int]]:
+        """Return the planned zone sequence for a controller plan."""
+
+        zone_runs: list[tuple[int, int]] = []
+        for zone_plan in controller_plan.zone_plans:
+            for segment in zone_plan.cycle_minutes:
+                if segment > 0:
+                    zone_runs.append((zone_plan.zone_number, int(segment * 60)))
+        return zone_runs
+
+    @staticmethod
+    def _automatic_run_window(controller_plan) -> tuple[datetime, datetime] | None:
+        """Return the projected automatic run window as local datetimes."""
+
+        if controller_plan.next_cycle_start is None or controller_plan.next_cycle_end is None:
+            return None
+        start_dt = dt_util.parse_datetime(controller_plan.next_cycle_start)
+        end_dt = dt_util.parse_datetime(controller_plan.next_cycle_end)
+        if start_dt is None or end_dt is None:
+            return None
+        return dt_util.as_local(start_dt), dt_util.as_local(end_dt)
+
+    @staticmethod
+    def _automatic_run_token(
+        controller_plan,
+        start_dt: datetime,
+        zone_runs: list[tuple[int, int]],
+    ) -> str:
+        """Return a stable once-per-window automatic run token."""
+
+        return (
+            f"{start_dt.date().isoformat()}:"
+            f"{controller_plan.device_id}:"
+            f"{start_dt.strftime('%H:%M')}:"
+            f"{tuple(zone_runs)}"
         )
 
     async def _persist_runtime_config_snapshot(self) -> None:
