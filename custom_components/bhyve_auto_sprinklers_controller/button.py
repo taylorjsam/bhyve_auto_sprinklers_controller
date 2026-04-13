@@ -1057,34 +1057,19 @@ def _build_controller_dashboard_text(
     if next_cycle_entity is not None:
         _append_markdown_card(
             lines,
+            _section_markdown_lines("Plan For Next Cycle", ""),
+            indent="          ",
+            variant="section",
+        )
+        _append_markdown_card(
+            lines,
             _projected_cycle_markdown_lines(next_cycle_entity, zone_dashboard_data),
             indent="          ",
             variant="note",
         )
-    _append_button_grid(
-        lines,
-        [
-            (water_now_entity, "Water now"),
-            (refresh_entity, "Refresh"),
-            (evaluate_entity, "Evaluate"),
-            (stop_all_entity, "Stop all"),
-        ],
-        columns=2,
-        indent="          ",
-        variant="action",
-    )
     _append_markdown_card(
         lines,
-        _weekly_runtime_markdown_lines(zone_dashboard_data),
-        indent="          ",
-        variant="note",
-    )
-
-    lines.append("      - type: vertical-stack")
-    lines.append("        cards:")
-    _append_markdown_card(
-        lines,
-        _section_markdown_lines("Zones", ""),
+        _section_markdown_lines("Plan by Zone", ""),
         indent="          ",
         variant="section",
     )
@@ -1103,6 +1088,21 @@ def _build_controller_dashboard_text(
         indent="          ",
         variant="zones",
     )
+    _append_button_grid(
+        lines,
+        [
+            (water_now_entity, "Water now"),
+            (refresh_entity, "Refresh"),
+            (evaluate_entity, "Evaluate"),
+            (stop_all_entity, "Stop all"),
+        ],
+        columns=2,
+        indent="          ",
+        variant="action",
+    )
+
+    lines.append("      - type: vertical-stack")
+    lines.append("        cards:")
     _append_markdown_card(
         lines,
         _section_markdown_lines("Automation", ""),
@@ -1131,6 +1131,19 @@ def _build_controller_dashboard_text(
         columns=2,
         indent="          ",
         variant="guardrail",
+    )
+    _append_markdown_card(
+        lines,
+        _section_markdown_lines("Time Watered This Week by Zone", ""),
+        indent="          ",
+        variant="section",
+    )
+    _append_entities_card(
+        lines,
+        "",
+        _weekly_runtime_entity_rows(zone_dashboard_data),
+        indent="          ",
+        variant="zones",
     )
     lines.append("  - title: \"Zones\"")
     lines.append(f"    path: {_yaml_quote(f'{controller_slug}_zones')}")
@@ -2127,7 +2140,7 @@ def _zone_card_header_markdown_lines(name: str, zone_number: int) -> list[str]:
 
 def _projected_cycle_markdown_lines(
     next_cycle_entity: str,
-    zone_dashboard_data: list[dict[str, str | int | None]],
+    zone_dashboard_data: list[dict[str, str | int | float | None]],
 ) -> list[str]:
     """Return markdown for the projected next cycle."""
 
@@ -2151,8 +2164,6 @@ def _projected_cycle_markdown_lines(
         f"{{% set estimated_end = state_attr('{next_cycle_entity}', 'estimated_next_need_end_local') %}}",
         f"{{% set fallback_highest_deficit = state_attr('{next_cycle_entity}', 'highest_zone_deficit_inches') %}}",
         f"{{% set fallback_peak_zone = state_attr('{next_cycle_entity}', 'peak_deficit_zone_name') %}}",
-        "### Plan For Next Cycle",
-        "",
         "{% if cycle in ['unavailable', 'unknown', 'none', 'not_configured'] %}",
         "Planner data is not currently available.",
         "{% else %}",
@@ -2291,6 +2302,30 @@ def _weekly_runtime_markdown_lines(
         "- **{{ item.name }}** — {{ state_attr(item.entity, 'recent_runtime_minutes_7d') or 0 }} min",
         "{% endfor %}",
     ]
+
+
+def _weekly_runtime_entity_rows(
+    zone_dashboard_data: list[dict[str, str | int | float | None]],
+) -> list[dict[str, str | None]]:
+    """Return entity rows for the overview weekly-runtime card."""
+
+    rows: list[dict[str, str | None]] = []
+    for zone in zone_dashboard_data:
+        runtime_entity = (
+            zone["runtime_this_week"]
+            or zone["recommended_runtime"]
+            or zone["deficit"]
+        )
+        if not runtime_entity:
+            continue
+        rows.append(
+            {
+                "entity": str(runtime_entity),
+                "name": str(zone["label"]),
+                "icon": _profile_icon(str(zone["profile_value"])),
+            }
+        )
+    return rows
 
 
 def _compact_zone_name(name: str, controller_name: str | None = None) -> str:
