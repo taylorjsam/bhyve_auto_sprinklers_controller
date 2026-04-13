@@ -2592,18 +2592,18 @@ def build_controller_plan(
         effective_minimum_run_threshold_minutes = minimum_run_threshold_minutes
 
         if str(zone_data["watering_profile"]) == ZONE_WATERING_PROFILE_DISABLED:
-            zone_reason = "Zone is excluded from planning (Disabled profile)."
+            zone_reason = "This zone is disabled, so it is being skipped."
         elif not zone.enabled:
             zone_reason = "Zone is disabled in B-hyve."
         elif not application_rate_configured:
             zone_reason = (
-                "Application rate is not configured. Calibrate this zone or enter inches per hour to enable planning."
+                "This zone needs an application rate before it can be scheduled."
             )
         elif deficit_inches_zone <= 0:
-            zone_reason = "The zone bucket is full right now."
+            zone_reason = "This zone has enough water right now."
         elif not trigger_active:
             zone_reason = (
-                f"Projected remaining usable water stays above the {trigger_buffer_inches:.2f} in trigger buffer until the next allowed window."
+                "This zone should stay above its watering trigger until the next allowed window."
             )
         else:
             requested_runtime = max(
@@ -2614,7 +2614,7 @@ def build_controller_plan(
                 if remaining_weekly_runtime <= 0:
                     requested_runtime = 0
                     capped_by_weekly_limit = True
-                    zone_reason = "Weekly runtime cap has been reached."
+                    zone_reason = "This zone has reached its weekly watering cap."
                 elif requested_runtime > remaining_weekly_runtime:
                     requested_runtime = remaining_weekly_runtime
                     capped_by_weekly_limit = True
@@ -2635,7 +2635,7 @@ def build_controller_plan(
                 else:
                     requested_runtime = 0
                     zone_reason = (
-                        f"Projected watering need is below the {effective_minimum_run_threshold_minutes}-minute minimum run threshold."
+                        f"The projected run is under the {effective_minimum_run_threshold_minutes}-minute minimum, so it will wait."
                     )
             if requested_runtime > 0 and zone_weather_hold_active:
                 requested_runtime = 0
@@ -2650,7 +2650,7 @@ def build_controller_plan(
                 )
             elif requested_runtime > 0:
                 zone_reason = (
-                    "Zone is projected to reach the trigger buffer before the next allowed window."
+                    "This zone is expected to need water before the next allowed window."
                 )
 
         if trigger_active:
@@ -2685,7 +2685,7 @@ def build_controller_plan(
 
     if enabled_non_disabled_zone_count <= 0:
         decision = "skip"
-        reason = "All zones are disabled or excluded from planning."
+        reason = "All zones are disabled, so nothing will water."
     elif configured_zone_count <= 0:
         decision = "not_configured"
         reason = (
@@ -2697,7 +2697,7 @@ def build_controller_plan(
             reason = "Recent effective rain is still carrying over."
         else:
             decision = "skip"
-            reason = "No zones need water right now; the planner is monitoring bucket depletion."
+            reason = "No zones need water right now, monitoring weather for changes."
     else:
         defer_for_forecast = (
             forecast_probability is not None
@@ -2711,10 +2711,10 @@ def build_controller_plan(
         )
         if defer_for_forecast:
             decision = "defer"
-            reason = "Rain is likely in the next 24 hours."
+            reason = "Rain is likely in the next 24 hours, so watering is being held."
         elif runnable_zone_count > 0:
             decision = "run"
-            reason = "One or more zones are projected to reach the trigger buffer before the next allowed window."
+            reason = "One or more zones are expected to need water before the next allowed window."
         elif trigger_weather_hold_count > 0:
             decision = "weather_hold"
             held_reasons = [
@@ -2726,18 +2726,18 @@ def build_controller_plan(
         elif trigger_schedule_hold_count > 0:
             decision = "restricted_day"
             reason = (
-                f"{weekday_name} is disabled by the controller watering-day schedule."
+                f"{weekday_name} is not an allowed watering day."
             )
         else:
             decision = "skip"
-            reason = "No zones currently need irrigation."
+            reason = "No zones need water right now."
 
     if decision in {"rain_delay", "defer", "weather_hold", "restricted_day"}:
         for zone_data in zone_runtime_data:
             if bool(zone_data["trigger_active"]):
                 zone_data["scheduled_runtime_minutes"] = 0
                 if decision == "defer":
-                    zone_data["reason"] = "Rain is likely in the next 24 hours."
+                    zone_data["reason"] = "Rain is likely in the next 24 hours, so watering is being held."
                 elif decision == "rain_delay":
                     zone_data["reason"] = "Recent effective rain is still carrying over."
 
@@ -2804,7 +2804,7 @@ def build_controller_plan(
             zone_data["scheduled_runtime_minutes"] = 0
             zone_data["deferred_by_window_limit"] = True
             zone_data["reason"] = (
-                f"{zone_data['reason']} Deferred to a later watering cycle because the current watering window is already full."
+                f"{zone_data['reason']} It will rotate into a later watering cycle because the current watering window is full."
             )
         automatic_window_reason = (
             f"{automatic_window_reason}; lower-priority due zones rotate into later cycles when demand exceeds the active watering window"

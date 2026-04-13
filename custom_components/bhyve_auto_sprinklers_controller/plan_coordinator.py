@@ -332,8 +332,8 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                     plan,
                     decision="not_configured",
                     reason=(
-                        "The configured solar radiation source is currently unavailable, "
-                        "so ET-based planning is paused until it returns."
+                        "Solar radiation is unavailable right now, so watering decisions "
+                        "are paused until that sensor returns."
                     ),
                     weather_source_status=solar_radiation_status,
                 )

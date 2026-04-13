@@ -1092,8 +1092,6 @@ def _build_controller_dashboard_text(
         lines,
         [
             (water_now_entity, "Water now"),
-            (refresh_entity, "Refresh"),
-            (evaluate_entity, "Evaluate"),
             (stop_all_entity, "Stop all"),
         ],
         columns=2,
@@ -1120,17 +1118,15 @@ def _build_controller_dashboard_text(
         indent="          ",
         variant="toggle",
     )
-    _append_tile_grid(
+    _append_button_grid(
         lines,
         [
-            (coefficient_entity, "Overall multiplier"),
-            (minimum_run_threshold_entity, "Minimum runtime"),
-            (max_wind_speed_entity, "Max wind"),
-            (minimum_temperature_entity, "Min temperature"),
+            (refresh_entity, "Refresh"),
+            (evaluate_entity, "Evaluate"),
         ],
         columns=2,
         indent="          ",
-        variant="guardrail",
+        variant="action",
     )
     _append_markdown_card(
         lines,
