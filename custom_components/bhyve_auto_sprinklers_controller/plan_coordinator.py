@@ -27,6 +27,7 @@ from .const import (
     CONF_WIND_SPEED_ENTITY_ID,
     DAILY_RAIN_ROLLOVER_GRACE_HOURS,
     DAILY_RAIN_ROLLOVER_TOLERANCE_INCHES,
+    DEFAULT_STARTUP_ENTITY_GRACE_PERIOD,
     DEFAULT_PLAN_SCAN_INTERVAL,
     DEFICIT_SMOOTHING_ALPHA,
     DEFICIT_SMOOTHING_BYPASS_DELTA_INCHES,
@@ -101,6 +102,8 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
         self._automatic_run_unsubscribers: dict[str, Callable[[], None]] = {}
         self._automatic_schedule_tokens: dict[str, str] = {}
         self._automatic_run_in_progress: set[str] = set()
+        self._startup_grace_until = dt_util.now() + DEFAULT_STARTUP_ENTITY_GRACE_PERIOD
+        self._startup_grace_sunset_retry_unsub: Callable[[], None] | None = None
 
     async def _async_update_data(self) -> BhyveIrrigationPlanSnapshot:
         """Build the current planning snapshot from live data and persisted weather."""
@@ -366,14 +369,21 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 else solar_radiation_status
             ),
         )
-        await async_maybe_send_post_sunset_plan_notifications(
-            self._entry,
-            snapshot.controllers,
-            now_local=now_local,
-            latitude=latitude,
-            longitude=longitude,
-        )
-        self._async_schedule_automatic_runs(snapshot, now_local)
+        if self._startup_grace_active(now_local):
+            self.async_clear_automatic_run_schedules(cancel_startup_retry=False)
+            _LOGGER.debug(
+                "Skipping B-hyve planner notifications and automatic watering until startup entity grace ends at %s",
+                self._startup_grace_until.isoformat(),
+            )
+        else:
+            await async_maybe_send_post_sunset_plan_notifications(
+                self._entry,
+                snapshot.controllers,
+                now_local=now_local,
+                latitude=latitude,
+                longitude=longitude,
+            )
+            self._async_schedule_automatic_runs(snapshot, now_local)
         return snapshot
 
     async def async_refresh_for_sunset_notification(
@@ -388,6 +398,10 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 if event_time is not None
                 else dt_util.now()
             )
+            if self._startup_grace_active(dt_util.now()):
+                self._schedule_sunset_retry_after_startup_grace(local_event_time)
+                return
+
             self._force_authoritative_et_date = local_event_time.date()
             await self.async_request_refresh()
         except Exception:
@@ -404,6 +418,10 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             return
 
         now_local = local_event_time
+        if self._startup_grace_active(dt_util.now()):
+            self._schedule_sunset_retry_after_startup_grace(now_local)
+            return
+
         latitude, longitude, _location_source = self._resolve_planner_location()
         await async_maybe_send_post_sunset_plan_notifications(
             self._entry,
@@ -414,12 +432,19 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             force=True,
         )
 
-    def async_clear_automatic_run_schedules(self) -> None:
+    def async_clear_automatic_run_schedules(
+        self,
+        *,
+        cancel_startup_retry: bool = True,
+    ) -> None:
         """Cancel pending automatic watering callbacks for this entry."""
 
         for device_id in list(self._automatic_run_unsubscribers):
             self._clear_automatic_run_schedule(device_id)
         self._automatic_schedule_tokens.clear()
+        if cancel_startup_retry and self._startup_grace_sunset_retry_unsub is not None:
+            self._startup_grace_sunset_retry_unsub()
+            self._startup_grace_sunset_retry_unsub = None
 
     def _async_schedule_automatic_runs(
         self,
@@ -427,6 +452,10 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
         now_local: datetime,
     ) -> None:
         """Schedule automatic runs from the current planner snapshot."""
+
+        if self._startup_grace_active(now_local):
+            self.async_clear_automatic_run_schedules(cancel_startup_retry=False)
+            return
 
         if not self._entry.runtime_data.automatic_watering_enabled:
             self.async_clear_automatic_run_schedules()
@@ -606,6 +635,43 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
         if unsub is not None:
             unsub()
         self._automatic_schedule_tokens.pop(device_id, None)
+
+    def _startup_grace_active(self, now_local: datetime | None = None) -> bool:
+        """Return whether HA is still restoring configured helper entities."""
+
+        now_local = now_local or dt_util.now()
+        return now_local < self._startup_grace_until
+
+    def _schedule_sunset_retry_after_startup_grace(
+        self,
+        event_time: datetime,
+    ) -> None:
+        """Retry the sunset plan refresh once startup entities have restored."""
+
+        if self._startup_grace_sunset_retry_unsub is not None:
+            return
+
+        retry_time = max(
+            self._startup_grace_until,
+            dt_util.now() + timedelta(seconds=1),
+        )
+
+        @callback
+        def _async_handle_retry(_now: datetime) -> None:
+            self._startup_grace_sunset_retry_unsub = None
+            self.hass.async_create_task(
+                self.async_refresh_for_sunset_notification(event_time)
+            )
+
+        self._startup_grace_sunset_retry_unsub = async_track_point_in_utc_time(
+            self.hass,
+            _async_handle_retry,
+            dt_util.as_utc(retry_time),
+        )
+        _LOGGER.debug(
+            "Deferring B-hyve sunset plan notification until startup entity grace ends at %s",
+            retry_time.isoformat(),
+        )
 
     @staticmethod
     def _zone_runs_for_plan(controller_plan) -> list[tuple[int, int]]:
