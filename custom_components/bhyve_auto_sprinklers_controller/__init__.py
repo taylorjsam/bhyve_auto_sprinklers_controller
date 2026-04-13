@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import contextlib
+from datetime import timedelta
+import logging
 
 import voluptuous as vol
 from aiohttp import ClientError
@@ -14,7 +15,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_sunset
 from homeassistant.util import dt as dt_util
 
 from .api import BhyveApiError, BhyveAuthenticationError, async_login_and_get_client
@@ -182,6 +183,7 @@ async def async_setup_entry(
     )
     entry.async_on_unload(entry.add_update_listener(_async_handle_entry_update))
     _async_register_runtime_wind_listener(hass, entry)
+    _async_register_sunset_plan_notification(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     hass.async_create_task(_async_startup_refresh(entry))
@@ -231,6 +233,26 @@ async def _async_handle_coordinator_update(entry: BhyveSprinklersConfigEntry) ->
 
     if entry.runtime_data.plan_coordinator is not None:
         await entry.runtime_data.plan_coordinator.async_request_refresh()
+
+
+def _async_register_sunset_plan_notification(
+    hass: HomeAssistant,
+    entry: BhyveSprinklersConfigEntry,
+) -> None:
+    """Refresh the authoritative plan and notify immediately after sunset."""
+
+    @callback
+    def _async_handle_sunset(event_time) -> None:
+        plan_coordinator = entry.runtime_data.plan_coordinator
+        if plan_coordinator is None:
+            return
+        hass.async_create_task(
+            plan_coordinator.async_refresh_for_sunset_notification(event_time)
+        )
+
+    entry.async_on_unload(
+        async_track_sunset(hass, _async_handle_sunset, offset=timedelta(minutes=1))
+    )
 
 
 def _async_register_runtime_wind_listener(

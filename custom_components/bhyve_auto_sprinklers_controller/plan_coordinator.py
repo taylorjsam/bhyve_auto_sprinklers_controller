@@ -169,7 +169,7 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             accumulated_et_today_inches,
             _final_et_today_inches,
             _,
-            et_progress_fraction,
+            _et_progress_fraction,
         ) = calc_accumulated_daily_et_inches(
             now_local,
             latitude,
@@ -195,13 +195,10 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 plan_et_today_inches = today_record.et_inches
                 used_last_good_record = True
             elif today_record is not None:
-                if et_progress_fraction >= 1.0:
-                    plan_et_today_inches = today_record.et_inches
-                else:
-                    plan_et_today_inches = max(
-                        float(today_record.et_inches),
-                        accumulated_et_today_inches,
-                    )
+                plan_et_today_inches = max(
+                    float(today_record.et_inches),
+                    accumulated_et_today_inches,
+                )
 
             try:
                 if not used_last_good_record:
@@ -368,6 +365,40 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             longitude=longitude,
         )
         return snapshot
+
+    async def async_refresh_for_sunset_notification(
+        self,
+        event_time: datetime | None = None,
+    ) -> None:
+        """Refresh the plan at sunset and send the daily summary immediately."""
+
+        try:
+            await self.async_request_refresh()
+        except Exception:
+            _LOGGER.warning(
+                "Unable to refresh the irrigation plan for the sunset notification",
+                exc_info=True,
+            )
+            return
+
+        snapshot = self.data
+        if snapshot is None:
+            return
+
+        now_local = (
+            dt_util.as_local(event_time)
+            if event_time is not None
+            else dt_util.now()
+        )
+        latitude, longitude, _location_source = self._resolve_planner_location()
+        await async_maybe_send_post_sunset_plan_notifications(
+            self._entry,
+            snapshot.controllers,
+            now_local=now_local,
+            latitude=latitude,
+            longitude=longitude,
+            force=True,
+        )
 
     async def _persist_runtime_config_snapshot(self) -> None:
         """Persist restore-backed planner config so restart refreshes stay stable."""

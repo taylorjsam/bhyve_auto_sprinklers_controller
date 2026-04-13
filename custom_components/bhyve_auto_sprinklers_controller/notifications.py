@@ -90,12 +90,16 @@ async def async_maybe_send_post_sunset_plan_notifications(
     now_local: datetime,
     latitude: float,
     longitude: float,
+    force: bool = False,
 ) -> None:
     """Send one automatic summary per controller after sunset each local day."""
 
     if _notification_service_parts(entry) is None:
         return
-    if calc_daily_et_progress_fraction(now_local, latitude, longitude) < 1.0:
+    if (
+        not force
+        and calc_daily_et_progress_fraction(now_local, latitude, longitude) < 1.0
+    ):
         return
 
     date_key = now_local.date().isoformat()
