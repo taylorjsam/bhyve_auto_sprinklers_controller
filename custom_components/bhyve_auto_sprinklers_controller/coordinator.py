@@ -144,6 +144,14 @@ class BhyveIrrigationCoordinator(DataUpdateCoordinator[BhyveIrrigationSnapshot])
 
         await self._async_cancel_sequence_task(device_id)
         if self._controller_active_run(device_id) is None:
+            try:
+                await self._irrigation_api.async_stop_watering(device_id)
+            except BhyveIrrigationApiError:
+                _LOGGER.debug(
+                    "B-hyve did not report an active run while stopping %s",
+                    device_id,
+                    exc_info=True,
+                )
             self._clear_optimistic_run(device_id)
             self._async_push_optimistic_update()
             await self.async_request_refresh()

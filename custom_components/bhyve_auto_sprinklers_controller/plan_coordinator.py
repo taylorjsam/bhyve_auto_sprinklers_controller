@@ -121,6 +121,10 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             for controller in (self.data.controllers if self.data is not None else ())
         }
         now_local = dt_util.now()
+        await self._async_reconcile_automatic_cycle_states(
+            irrigation_snapshot.controllers,
+            now_local,
+        )
 
         daily_rain, weather_status = self._get_daily_rain_inputs()
         yesterday_key = (now_local.date() - timedelta(days=1)).isoformat()
@@ -680,6 +684,52 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 continue
             await self._async_resume_automatic_cycle(controller, cycle)
 
+    async def _async_reconcile_automatic_cycle_states(
+        self,
+        controllers: object,
+        now_local: datetime,
+    ) -> None:
+        """Clear stale persisted automatic cycles when B-hyve says watering stopped."""
+
+        await self._water_balance_store.async_load()
+        for controller in controllers:
+            device_id = controller.device_id
+            cycle = self._water_balance_store.get_automatic_cycle(device_id)
+            if not cycle:
+                continue
+
+            active_run = controller.active_run
+            if active_run is not None:
+                continue
+
+            stored_expected_end = self._parse_cycle_datetime(
+                cycle.get("active_expected_end")
+            )
+            if stored_expected_end is None:
+                continue
+
+            task_active = device_id in self._automatic_sequence_tasks
+            if task_active and stored_expected_end > now_local + timedelta(seconds=30):
+                updated_at = self._parse_cycle_datetime(cycle.get("updated_at"))
+                if (
+                    updated_at is None
+                    or now_local - updated_at <= timedelta(seconds=45)
+                ):
+                    continue
+                _LOGGER.info(
+                    "Cancelling automatic watering for %s because B-hyve no longer reports the active run; it was likely stopped outside Home Assistant",
+                    controller.nickname,
+                )
+                await self.async_cancel_automatic_cycle(device_id)
+                continue
+
+            if not task_active and stored_expected_end <= now_local:
+                _LOGGER.info(
+                    "Clearing stale automatic watering recovery for %s because B-hyve reports no active run",
+                    controller.nickname,
+                )
+                await self._water_balance_store.async_clear_automatic_cycle(device_id)
+
     async def async_cancel_automatic_cycle(self, device_id: str | None = None) -> None:
         """Cancel persisted automatic watering so explicit stop stays stopped."""
 
@@ -760,10 +810,36 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 int((expected_end - now_local).total_seconds()) + 1,
             )
         elif stored_expected_end is not None and stored_expected_end > now_local:
+            updated_at = self._parse_cycle_datetime(cycle.get("updated_at"))
+            if (
+                updated_at is not None
+                and now_local - updated_at > timedelta(seconds=60)
+            ):
+                _LOGGER.info(
+                    "Clearing automatic watering recovery for %s because B-hyve no longer reports the stored active run",
+                    controller.nickname,
+                )
+                await self._water_balance_store.async_clear_automatic_cycle(device_id)
+                return
             initial_delay_seconds = max(
                 1,
                 int((stored_expected_end - now_local).total_seconds()) + 1,
             )
+        elif stored_expected_end is not None:
+            completed_index = self._automatic_cycle_completed_active_index(
+                controller,
+                cycle,
+                zone_runs,
+                stored_expected_end,
+            )
+            if completed_index is not None and completed_index >= start_index:
+                start_index = min(len(zone_runs), completed_index + 1)
+                _LOGGER.info(
+                    "Recovered completed B-hyve run for %s at zone sequence index %s; continuing at index %s",
+                    controller.nickname,
+                    completed_index,
+                    start_index,
+                )
 
         if start_index >= len(zone_runs):
             self._entry.runtime_data.automatic_run_tokens[device_id] = run_token
@@ -835,6 +911,14 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                     await self._water_balance_store.async_clear_automatic_cycle(device_id)
                     return
 
+                if index > max(0, start_index):
+                    still_due = await self._async_automatic_sequence_still_due(
+                        device_id,
+                    )
+                    if not still_due:
+                        await self._water_balance_store.async_clear_automatic_cycle(device_id)
+                        return
+
                 now_local = dt_util.now()
                 if now_local > window_end:
                     _LOGGER.info(
@@ -853,7 +937,7 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                     window_start=window_start,
                     window_end=window_end,
                     active_index=index,
-                    next_index=index + 1,
+                    next_index=index,
                     active_zone_number=zone_number,
                     active_duration=duration,
                     active_expected_end=expected_end,
@@ -866,6 +950,18 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                         duration,
                         source="automatic_window",
                         replace_existing=(replace_first and index == start_index),
+                    )
+                    await self._persist_automatic_cycle(
+                        device_id=device_id,
+                        run_token=run_token,
+                        zone_runs=normalized_runs,
+                        window_start=window_start,
+                        window_end=window_end,
+                        active_index=index,
+                        next_index=index + 1,
+                        active_zone_number=zone_number,
+                        active_duration=duration,
+                        active_expected_end=expected_end,
                     )
                 except Exception:
                     await self._water_balance_store.async_clear_automatic_cycle(device_id)
@@ -884,6 +980,36 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 and self._automatic_sequence_tasks.get(device_id) is current_task
             ):
                 self._automatic_sequence_tasks.pop(device_id, None)
+
+    async def _async_automatic_sequence_still_due(self, device_id: str) -> bool:
+        """Return whether an in-flight automatic sequence should continue."""
+
+        try:
+            await self._entry.runtime_data.coordinator.async_request_refresh()
+            await self.async_request_refresh()
+        except Exception:
+            _LOGGER.warning(
+                "Unable to refresh B-hyve plan before continuing automatic watering for %s; keeping the current sequence",
+                device_id,
+                exc_info=True,
+            )
+            return True
+
+        controller_plan = self.get_controller_plan(device_id)
+        if controller_plan is None:
+            _LOGGER.info(
+                "Stopping automatic watering for %s because the planner no longer has a controller plan",
+                device_id,
+            )
+            return False
+        if controller_plan.decision != "run":
+            _LOGGER.info(
+                "Stopping remaining automatic watering for %s because the plan changed to %s",
+                controller_plan.nickname,
+                controller_plan.decision,
+            )
+            return False
+        return True
 
     async def _persist_automatic_cycle(
         self,
@@ -983,6 +1109,58 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 return index
         return None
 
+    @classmethod
+    def _automatic_cycle_completed_active_index(
+        cls,
+        controller: object,
+        cycle: dict[str, Any],
+        zone_runs: list[tuple[int, int]],
+        expected_end: datetime,
+    ) -> int | None:
+        """Return a completed active index from B-hyve history, if one is visible."""
+
+        active_index = cls._coerce_cycle_index(
+            cycle.get("active_index"),
+            len(zone_runs),
+            default=-1,
+        )
+        if active_index < 0:
+            return None
+
+        try:
+            active_zone_number = int(cycle.get("active_zone_number"))
+            active_duration = int(cycle.get("active_duration"))
+        except (TypeError, ValueError):
+            return None
+        if active_duration <= 0:
+            return None
+
+        matching_index = cls._automatic_cycle_active_index(
+            zone_runs,
+            active_zone_number,
+            preferred_index=active_index,
+        )
+        if matching_index is None:
+            return None
+
+        expected_start = expected_end - timedelta(seconds=active_duration)
+        expected_start_ts = int(expected_start.timestamp())
+        duration_tolerance = max(120, int(active_duration * 0.25))
+        start_tolerance = 120
+
+        for zone in getattr(controller, "zones", ()):
+            if getattr(zone, "zone_number", None) != active_zone_number:
+                continue
+            for event in merged_zone_recent_events(zone):
+                if event.end_ts is None or event.duration is None:
+                    continue
+                if event.end_ts < expected_start_ts - start_tolerance:
+                    continue
+                if abs(int(event.duration) - active_duration) > duration_tolerance:
+                    continue
+                return matching_index
+        return None
+
     def _clear_automatic_run_schedule(self, device_id: str) -> None:
         """Cancel a pending automatic watering callback for one controller."""
 
@@ -1032,11 +1210,22 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
     def _zone_runs_for_plan(controller_plan) -> list[tuple[int, int]]:
         """Return the planned zone sequence for a controller plan."""
 
-        zone_runs: list[tuple[int, int]] = []
+        per_zone_segments: list[tuple[int, list[int]]] = []
         for zone_plan in controller_plan.zone_plans:
-            for segment in zone_plan.cycle_minutes:
-                if segment > 0:
-                    zone_runs.append((zone_plan.zone_number, int(segment * 60)))
+            segments = [
+                int(segment * 60)
+                for segment in zone_plan.cycle_minutes
+                if segment > 0 and int(segment * 60) > 0
+            ]
+            if segments:
+                per_zone_segments.append((zone_plan.zone_number, segments))
+
+        zone_runs: list[tuple[int, int]] = []
+        max_segments = max((len(segments) for _zone, segments in per_zone_segments), default=0)
+        for segment_index in range(max_segments):
+            for zone_number, segments in per_zone_segments:
+                if segment_index < len(segments):
+                    zone_runs.append((zone_number, segments[segment_index]))
         return zone_runs
 
     @staticmethod
@@ -1409,6 +1598,9 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
     ) -> tuple[float, str | None]:
         """Apply new completed irrigation events once using the measured application rate."""
 
+        if application_rate_inches_per_hour <= 0:
+            return current_water_inches, bucket_state.last_irrigation_event_key
+
         events = [
             event
             for event in merged_zone_recent_events(zone)
@@ -1440,6 +1632,7 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                     continue
                 new_events.append(event)
 
+        latest_applied_event_key: str | None = None
         for event in reversed(new_events):
             inches_applied = calc_zone_irrigation_inches(
                 application_rate_inches_per_hour,
@@ -1451,11 +1644,9 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 current_water_inches + inches_applied,
                 capacity_inches,
             )
+            latest_applied_event_key = zone_irrigation_event_key(event)
 
-        latest_event_key = (
-            zone_irrigation_event_key(events[0]) if new_events else stored_event_key
-        )
-        return current_water_inches, latest_event_key
+        return current_water_inches, latest_applied_event_key or stored_event_key
 
     @staticmethod
     def _irrigation_event_ts_from_key(event_key: str | None) -> int | None:

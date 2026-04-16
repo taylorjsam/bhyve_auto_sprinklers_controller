@@ -368,6 +368,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         """Handle the quick-run service."""
 
         coordinator = _async_find_coordinator(hass, call.data[ATTR_DEVICE_ID])
+        entry = _async_find_entry_for_coordinator(hass, coordinator)
+        if entry.runtime_data.plan_coordinator is not None:
+            await entry.runtime_data.plan_coordinator.async_cancel_automatic_cycle(
+                call.data[ATTR_DEVICE_ID]
+            )
         await coordinator.async_quick_run_zone(
             call.data[ATTR_DEVICE_ID],
             int(call.data[ATTR_ZONE_NUMBER]),

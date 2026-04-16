@@ -2402,7 +2402,7 @@ def _validate_bucket_matrix_invariants(results: dict[str, object]) -> list[str]:
         failures.append("The partial-configuration scenario should still leave Front Yard Perennials unconfigured.")
     if unconfigured_zone.recommended_runtime_minutes != 0:
         failures.append("Unconfigured zones should not receive a runtime recommendation.")
-    if "Application rate is not configured" not in unconfigured_zone.reason:
+    if "application rate" not in unconfigured_zone.reason.lower():
         failures.append("Unconfigured zones should explain that they need calibration or an application rate.")
 
     return failures
@@ -2650,29 +2650,28 @@ def _validate_bucket_trigger_projection(models, planner) -> list[str]:
     if overnight_zone.projected_daylight_hours != 0:
         failures.append("Overnight trigger projection should not count daylight ET before a pre-dawn watering window.")
 
-    overnight_capacity = float(overnight_zone.capacity_inches)
     overnight_buffer = float(overnight_zone.trigger_buffer_inches)
     overnight_exact = _build_bucket_test_plan(
         models,
         planner,
         now_local=overnight_now,
-        current_water_inches=overnight_capacity - overnight_buffer,
+        current_water_inches=overnight_buffer,
         window_start=overnight_window_start,
         window_end=overnight_window_end,
     )
     if not _zone_plan(overnight_exact, "Backyard Right").trigger_active:
-        failures.append("When projected daylight hours are zero, the imminent-window fallback should trigger exactly at the deficit buffer.")
+        failures.append("When projected daylight hours are zero, the imminent-window fallback should trigger exactly at the remaining-water buffer.")
 
     overnight_above = _build_bucket_test_plan(
         models,
         planner,
         now_local=overnight_now,
-        current_water_inches=overnight_capacity - max(0.0, overnight_buffer - 0.01),
+        current_water_inches=overnight_buffer + 0.01,
         window_start=overnight_window_start,
         window_end=overnight_window_end,
     )
     if _zone_plan(overnight_above, "Backyard Right").trigger_active:
-        failures.append("When projected daylight hours are zero, the imminent-window fallback should stay off above the deficit buffer.")
+        failures.append("When projected daylight hours are zero, the imminent-window fallback should stay off above the remaining-water buffer.")
 
     return failures
 

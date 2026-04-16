@@ -2163,6 +2163,7 @@ def _active_zone_plans_for_summary(controller_plan) -> list:
         zone_plan
         for zone_plan in controller_plan.zone_plans
         if zone_plan.enabled
+        and zone_plan.application_rate_configured
         and normalize_zone_watering_profile(zone_plan.watering_profile)
         != ZONE_WATERING_PROFILE_DISABLED
     ]
@@ -2341,7 +2342,6 @@ def _estimate_zone_next_need(
     zone_hourly_et_inches = max(0.0, float(zone_plan.zone_hourly_et_inches or 0.0))
     current_water_inches = float(zone_plan.current_water_inches or 0.0)
     trigger_buffer_inches = float(zone_plan.trigger_buffer_inches or 0.0)
-    deficit_inches = float(zone_plan.deficit_inches or 0.0)
     now_local = dt_util.now()
     search_now = now_local
     maximum_search_days = 45
@@ -2367,7 +2367,7 @@ def _estimate_zone_next_need(
         )
         projected_remaining_inches = current_water_inches - projected_draw_inches
         if projected_daylight_hours == 0:
-            trigger_active = deficit_inches >= trigger_buffer_inches
+            trigger_active = current_water_inches <= trigger_buffer_inches
         else:
             trigger_active = projected_remaining_inches <= trigger_buffer_inches
 

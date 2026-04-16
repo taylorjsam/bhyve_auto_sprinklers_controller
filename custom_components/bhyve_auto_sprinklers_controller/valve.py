@@ -139,6 +139,9 @@ class BhyveSprinklerZoneValve(BhyveZoneCoordinatorEntity, ValveEntity):
         if not zone.enabled:
             raise HomeAssistantError(f"Zone '{zone.name}' is disabled in B-hyve")
 
+        plan_coordinator = self._entry.runtime_data.plan_coordinator
+        if plan_coordinator is not None:
+            await plan_coordinator.async_cancel_automatic_cycle(self._device_id)
         await self.coordinator.async_quick_run_zone(
             self._device_id,
             self._zone_number,
