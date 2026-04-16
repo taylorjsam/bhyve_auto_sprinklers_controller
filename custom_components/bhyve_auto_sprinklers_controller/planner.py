@@ -2547,7 +2547,10 @@ def build_controller_plan(
             and application_rate_configured
         ):
             if projected_daylight_hours == 0:
-                trigger_active = deficit_inches_zone >= trigger_buffer_inches
+                # Overnight projection has no ET draw, so trigger only when the
+                # usable-water bucket is actually near empty. Treating any small
+                # deficit as due here would make nearly full zones water before dawn.
+                trigger_active = current_water_inches <= trigger_buffer_inches
             else:
                 trigger_active = projected_remaining_inches <= trigger_buffer_inches
         zone_data["projected_et_draw_inches"] = projected_et_draw_inches

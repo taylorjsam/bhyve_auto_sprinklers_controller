@@ -1063,29 +1063,27 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
             return current_water_inches, bucket_state.last_irrigation_event_key
 
         stored_event_key = bucket_state.last_irrigation_event_key
-        cutoff_dt = None
-        if bucket_state.last_bucket_update:
-            cutoff_dt = dt_util.parse_datetime(bucket_state.last_bucket_update)
-            if cutoff_dt is not None:
-                cutoff_dt = dt_util.as_local(cutoff_dt)
+        stored_event_ts = self._irrigation_event_ts_from_key(stored_event_key)
 
         new_events: list[BhyveLatestEvent] = []
-        stored_key_found = False
-        for event in events:
-            event_key = zone_irrigation_event_key(event)
-            if event_key is None:
-                continue
-            if stored_event_key and event_key == stored_event_key:
-                stored_key_found = True
-                break
-            if cutoff_dt is not None:
-                event_dt = datetime.fromtimestamp(event.end_ts, tz=now_local.tzinfo)
-                if event_dt <= cutoff_dt:
+        if stored_event_key is None:
+            new_events = [
+                event for event in events if zone_irrigation_event_key(event) is not None
+            ]
+        else:
+            for event in events:
+                event_key = zone_irrigation_event_key(event)
+                if event_key is None:
                     continue
-            new_events.append(event)
-
-        if stored_event_key and not stored_key_found and cutoff_dt is None:
-            new_events = []
+                if event_key == stored_event_key:
+                    break
+                if (
+                    stored_event_ts is not None
+                    and event.end_ts is not None
+                    and event.end_ts <= stored_event_ts
+                ):
+                    continue
+                new_events.append(event)
 
         for event in reversed(new_events):
             inches_applied = calc_zone_irrigation_inches(
@@ -1099,8 +1097,21 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 capacity_inches,
             )
 
-        latest_event_key = zone_irrigation_event_key(events[0]) or stored_event_key
+        latest_event_key = (
+            zone_irrigation_event_key(events[0]) if new_events else stored_event_key
+        )
         return current_water_inches, latest_event_key
+
+    @staticmethod
+    def _irrigation_event_ts_from_key(event_key: str | None) -> int | None:
+        """Extract the event end timestamp from a persisted irrigation marker."""
+
+        if not event_key:
+            return None
+        try:
+            return int(str(event_key).split(":", 1)[0])
+        except (TypeError, ValueError):
+            return None
 
     def _apply_hourly_et_to_bucket(
         self,
