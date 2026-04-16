@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+import contextlib
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 import logging
@@ -101,6 +103,7 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
         self._force_authoritative_et_date: date | None = None
         self._automatic_run_unsubscribers: dict[str, Callable[[], None]] = {}
         self._automatic_schedule_tokens: dict[str, str] = {}
+        self._automatic_sequence_tasks: dict[str, asyncio.Task[None]] = {}
         self._automatic_run_in_progress: set[str] = set()
         self._startup_grace_until = dt_util.now() + DEFAULT_STARTUP_ENTITY_GRACE_PERIOD
         self._startup_grace_sunset_retry_unsub: Callable[[], None] | None = None
@@ -383,6 +386,7 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 latitude=latitude,
                 longitude=longitude,
             )
+            await self.async_resume_automatic_cycles()
             self._async_schedule_automatic_runs(snapshot, now_local)
         return snapshot
 
@@ -442,6 +446,9 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
         for device_id in list(self._automatic_run_unsubscribers):
             self._clear_automatic_run_schedule(device_id)
         self._automatic_schedule_tokens.clear()
+        for task in list(self._automatic_sequence_tasks.values()):
+            task.cancel()
+        self._automatic_sequence_tasks.clear()
         if cancel_startup_retry and self._startup_grace_sunset_retry_unsub is not None:
             self._startup_grace_sunset_retry_unsub()
             self._startup_grace_sunset_retry_unsub = None
@@ -465,7 +472,10 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
         for controller_plan in snapshot.controllers:
             device_id = controller_plan.device_id
             active_device_ids.add(device_id)
-            if device_id in self._automatic_run_in_progress:
+            if (
+                device_id in self._automatic_run_in_progress
+                or device_id in self._automatic_sequence_tasks
+            ):
                 continue
 
             zone_runs = self._zone_runs_for_plan(controller_plan)
@@ -547,6 +557,8 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
 
         if device_id in self._automatic_run_in_progress:
             return
+        if device_id in self._automatic_sequence_tasks:
+            return
         self._automatic_run_in_progress.add(device_id)
         try:
             if not self._entry.runtime_data.automatic_watering_enabled:
@@ -611,10 +623,15 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                 return
 
             try:
-                await coordinator.async_run_zone_sequence(
-                    device_id,
-                    zone_runs,
-                    source="automatic_window",
+                await self._async_run_durable_automatic_sequence(
+                    device_id=device_id,
+                    run_token=run_token,
+                    zone_runs=zone_runs,
+                    window_start=start_dt,
+                    window_end=end_dt,
+                    start_index=0,
+                    initial_delay_seconds=0,
+                    replace_first=True,
                 )
             except Exception:
                 _LOGGER.warning(
@@ -623,10 +640,348 @@ class BhyveIrrigationPlanCoordinator(DataUpdateCoordinator[BhyveIrrigationPlanSn
                     exc_info=True,
                 )
                 return
-
-            self._entry.runtime_data.automatic_run_tokens[device_id] = run_token
         finally:
             self._automatic_run_in_progress.discard(device_id)
+
+    async def async_resume_automatic_cycles(self) -> None:
+        """Resume any persisted automatic cycle after Home Assistant restarts."""
+
+        if self._startup_grace_active(dt_util.now()):
+            _LOGGER.debug(
+                "Deferring automatic watering recovery until startup entity grace ends"
+            )
+            return
+
+        coordinator = self._entry.runtime_data.coordinator
+        if coordinator.data is None:
+            await coordinator.async_request_refresh()
+        if coordinator.data is None:
+            return
+
+        await self._water_balance_store.async_load()
+        controller_device_ids = {
+            controller.device_id for controller in coordinator.data.controllers
+        }
+        for stored_device_id in (
+            self._water_balance_store.get_automatic_cycle_device_ids()
+            - controller_device_ids
+        ):
+            _LOGGER.info(
+                "Clearing automatic watering recovery for missing controller %s",
+                stored_device_id,
+            )
+            await self._water_balance_store.async_clear_automatic_cycle(stored_device_id)
+
+        for controller in coordinator.data.controllers:
+            if controller.device_id in self._automatic_sequence_tasks:
+                continue
+            cycle = self._water_balance_store.get_automatic_cycle(controller.device_id)
+            if not cycle:
+                continue
+            await self._async_resume_automatic_cycle(controller, cycle)
+
+    async def async_cancel_automatic_cycle(self, device_id: str | None = None) -> None:
+        """Cancel persisted automatic watering so explicit stop stays stopped."""
+
+        device_ids: set[str] = set()
+        if device_id is not None:
+            device_ids.add(device_id)
+        else:
+            device_ids.update(self._automatic_sequence_tasks)
+            if self._entry.runtime_data.coordinator.data is not None:
+                device_ids.update(
+                    controller.device_id
+                    for controller in self._entry.runtime_data.coordinator.data.controllers
+                )
+
+        for target_device_id in device_ids:
+            self._clear_automatic_run_schedule(target_device_id)
+            task = self._automatic_sequence_tasks.pop(target_device_id, None)
+            current_task = asyncio.current_task()
+            if task is not None and task is not current_task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            await self._water_balance_store.async_clear_automatic_cycle(target_device_id)
+            self._entry.runtime_data.automatic_run_tokens.pop(target_device_id, None)
+
+    async def _async_resume_automatic_cycle(self, controller, cycle: dict[str, Any]) -> None:
+        """Resume one stored automatic cycle if it is still safe to continue."""
+
+        device_id = controller.device_id
+        if not self._entry.runtime_data.automatic_watering_enabled:
+            _LOGGER.info(
+                "Clearing automatic watering recovery for %s because automatic watering is off",
+                controller.nickname,
+            )
+            await self._water_balance_store.async_clear_automatic_cycle(device_id)
+            return
+
+        zone_runs = self._coerce_automatic_cycle_zone_runs(cycle.get("zone_runs"))
+        run_token = str(cycle.get("token") or "")
+        window_start = self._parse_cycle_datetime(cycle.get("window_start"))
+        window_end = self._parse_cycle_datetime(cycle.get("window_end"))
+        if not zone_runs or not run_token or window_start is None or window_end is None:
+            _LOGGER.warning(
+                "Clearing invalid automatic watering recovery record for %s",
+                controller.nickname,
+            )
+            await self._water_balance_store.async_clear_automatic_cycle(device_id)
+            return
+
+        now_local = dt_util.now()
+        active_run = controller.active_run
+        stored_expected_end = self._parse_cycle_datetime(cycle.get("active_expected_end"))
+        if now_local > window_end and active_run is None:
+            _LOGGER.info(
+                "Clearing automatic watering recovery for %s because the window has ended",
+                controller.nickname,
+            )
+            await self._water_balance_store.async_clear_automatic_cycle(device_id)
+            return
+
+        start_index = self._coerce_cycle_index(cycle.get("next_index"), len(zone_runs))
+        initial_delay_seconds = 0
+        if active_run is not None:
+            matching_index = self._automatic_cycle_active_index(
+                zone_runs,
+                active_run.zone_number,
+                preferred_index=self._coerce_cycle_index(
+                    cycle.get("active_index"),
+                    len(zone_runs),
+                    default=-1,
+                ),
+            )
+            if matching_index is not None:
+                start_index = min(len(zone_runs), matching_index + 1)
+            expected_end = dt_util.as_local(active_run.expected_end)
+            initial_delay_seconds = max(
+                1,
+                int((expected_end - now_local).total_seconds()) + 1,
+            )
+        elif stored_expected_end is not None and stored_expected_end > now_local:
+            initial_delay_seconds = max(
+                1,
+                int((stored_expected_end - now_local).total_seconds()) + 1,
+            )
+
+        if start_index >= len(zone_runs):
+            self._entry.runtime_data.automatic_run_tokens[device_id] = run_token
+            await self._water_balance_store.async_clear_automatic_cycle(device_id)
+            return
+
+        task = self.hass.async_create_task(
+            self._async_run_durable_automatic_sequence(
+                device_id=device_id,
+                run_token=run_token,
+                zone_runs=zone_runs,
+                window_start=window_start,
+                window_end=window_end,
+                start_index=start_index,
+                initial_delay_seconds=initial_delay_seconds,
+                replace_first=False,
+            )
+        )
+        self._automatic_sequence_tasks[device_id] = task
+        _LOGGER.info(
+            "Recovered automatic watering for %s at zone sequence index %s",
+            controller.nickname,
+            start_index,
+        )
+
+    async def _async_run_durable_automatic_sequence(
+        self,
+        *,
+        device_id: str,
+        run_token: str,
+        zone_runs: list[tuple[int, int]],
+        window_start: datetime,
+        window_end: datetime,
+        start_index: int,
+        initial_delay_seconds: int,
+        replace_first: bool,
+    ) -> None:
+        """Run automatic watering with enough persisted state to survive restarts."""
+
+        normalized_runs = [
+            (int(zone_number), int(duration))
+            for zone_number, duration in zone_runs
+            if int(duration) > 0
+        ]
+        if not normalized_runs:
+            await self._water_balance_store.async_clear_automatic_cycle(device_id)
+            return
+
+        current_task = asyncio.current_task()
+        existing_task = self._automatic_sequence_tasks.get(device_id)
+        if existing_task is not None and existing_task is not current_task:
+            existing_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await existing_task
+        if current_task is not None:
+            self._automatic_sequence_tasks[device_id] = current_task
+
+        try:
+            if initial_delay_seconds > 0:
+                await asyncio.sleep(initial_delay_seconds)
+
+            for index in range(max(0, start_index), len(normalized_runs)):
+                if (
+                    current_task is not None
+                    and self._automatic_sequence_tasks.get(device_id) is not current_task
+                ):
+                    return
+                if not self._entry.runtime_data.automatic_watering_enabled:
+                    await self._water_balance_store.async_clear_automatic_cycle(device_id)
+                    return
+
+                now_local = dt_util.now()
+                if now_local > window_end:
+                    _LOGGER.info(
+                        "Stopping automatic watering recovery for %s because the window ended",
+                        device_id,
+                    )
+                    await self._water_balance_store.async_clear_automatic_cycle(device_id)
+                    return
+
+                zone_number, duration = normalized_runs[index]
+                expected_end = now_local + timedelta(seconds=duration)
+                await self._persist_automatic_cycle(
+                    device_id=device_id,
+                    run_token=run_token,
+                    zone_runs=normalized_runs,
+                    window_start=window_start,
+                    window_end=window_end,
+                    active_index=index,
+                    next_index=index + 1,
+                    active_zone_number=zone_number,
+                    active_duration=duration,
+                    active_expected_end=expected_end,
+                )
+
+                try:
+                    await self._entry.runtime_data.coordinator.async_quick_run_zone(
+                        device_id,
+                        zone_number,
+                        duration,
+                        source="automatic_window",
+                        replace_existing=(replace_first and index == start_index),
+                    )
+                except Exception:
+                    await self._water_balance_store.async_clear_automatic_cycle(device_id)
+                    raise
+
+                if index < len(normalized_runs) - 1:
+                    await asyncio.sleep(max(1, duration) + 1)
+
+            self._entry.runtime_data.automatic_run_tokens[device_id] = run_token
+            await self._water_balance_store.async_clear_automatic_cycle(device_id)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if (
+                current_task is not None
+                and self._automatic_sequence_tasks.get(device_id) is current_task
+            ):
+                self._automatic_sequence_tasks.pop(device_id, None)
+
+    async def _persist_automatic_cycle(
+        self,
+        *,
+        device_id: str,
+        run_token: str,
+        zone_runs: list[tuple[int, int]],
+        window_start: datetime,
+        window_end: datetime,
+        active_index: int,
+        next_index: int,
+        active_zone_number: int,
+        active_duration: int,
+        active_expected_end: datetime,
+    ) -> None:
+        """Write the current automatic cycle checkpoint."""
+
+        now_local = dt_util.now()
+        await self._water_balance_store.async_set_automatic_cycle(
+            device_id,
+            {
+                "token": run_token,
+                "zone_runs": [
+                    {"zone_number": zone_number, "duration": duration}
+                    for zone_number, duration in zone_runs
+                ],
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+                "active_index": int(active_index),
+                "next_index": int(next_index),
+                "active_zone_number": int(active_zone_number),
+                "active_duration": int(active_duration),
+                "active_expected_end": active_expected_end.isoformat(),
+                "updated_at": now_local.isoformat(),
+            },
+        )
+
+    @staticmethod
+    def _coerce_automatic_cycle_zone_runs(value: Any) -> list[tuple[int, int]]:
+        """Return sanitized automatic-cycle zone runs from storage."""
+
+        if not isinstance(value, list):
+            return []
+        zone_runs: list[tuple[int, int]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            try:
+                zone_number = int(item["zone_number"])
+                duration = int(item["duration"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if zone_number > 0 and duration > 0:
+                zone_runs.append((zone_number, duration))
+        return zone_runs
+
+    @staticmethod
+    def _parse_cycle_datetime(value: Any) -> datetime | None:
+        """Parse a persisted cycle timestamp as a local datetime."""
+
+        if not isinstance(value, str):
+            return None
+        parsed = dt_util.parse_datetime(value)
+        if parsed is None:
+            return None
+        return dt_util.as_local(parsed)
+
+    @staticmethod
+    def _coerce_cycle_index(
+        value: Any,
+        run_count: int,
+        *,
+        default: int = 0,
+    ) -> int:
+        """Coerce a stored sequence index into a safe range."""
+
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            index = default
+        return min(max(index, default), run_count)
+
+    @staticmethod
+    def _automatic_cycle_active_index(
+        zone_runs: list[tuple[int, int]],
+        zone_number: int,
+        *,
+        preferred_index: int,
+    ) -> int | None:
+        """Find the stored sequence index for the currently active zone."""
+
+        if 0 <= preferred_index < len(zone_runs):
+            if zone_runs[preferred_index][0] == zone_number:
+                return preferred_index
+        for index, (candidate_zone_number, _duration) in enumerate(zone_runs):
+            if candidate_zone_number == zone_number:
+                return index
+        return None
 
     def _clear_automatic_run_schedule(self, device_id: str) -> None:
         """Cancel a pending automatic watering callback for one controller."""

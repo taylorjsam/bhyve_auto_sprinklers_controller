@@ -363,6 +363,9 @@ class BhyveSprinklerStopAllButton(
         if self.controller is None:
             raise HomeAssistantError("Sprinkler controller is not available")
 
+        plan_coordinator = self._entry.runtime_data.plan_coordinator
+        if plan_coordinator is not None:
+            await plan_coordinator.async_cancel_automatic_cycle(self._device_id)
         await self.coordinator.async_stop_watering(self._device_id)
 
 

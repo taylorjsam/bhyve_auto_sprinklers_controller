@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_MINIMUM_RUN_THRESHOLD_MINUTES,
     DEFAULT_MIN_WATERING_TEMPERATURE_F,
     DEFAULT_OVERALL_WATERING_COEFFICIENT,
+    DEFAULT_STARTUP_ENTITY_GRACE_PERIOD,
     DEFAULT_STARTUP_REFRESH_DELAY,
     DOMAIN,
     PLATFORMS,
@@ -221,6 +222,14 @@ async def _async_startup_refresh(entry: BhyveSprinklersConfigEntry) -> None:
         await asyncio.sleep(DEFAULT_STARTUP_REFRESH_DELAY.total_seconds())
         await entry.runtime_data.coordinator.async_request_refresh()
         await entry.runtime_data.plan_coordinator.async_request_refresh()
+        grace_remaining = (
+            DEFAULT_STARTUP_ENTITY_GRACE_PERIOD - DEFAULT_STARTUP_REFRESH_DELAY
+        ).total_seconds()
+        if grace_remaining > 0:
+            await asyncio.sleep(grace_remaining)
+        await entry.runtime_data.coordinator.async_request_refresh()
+        await entry.runtime_data.plan_coordinator.async_resume_automatic_cycles()
+        await entry.runtime_data.plan_coordinator.async_request_refresh()
     except Exception:
         _LOGGER.debug(
             "Unable to complete the startup B-hyve refresh for %s",
@@ -323,6 +332,7 @@ def _async_register_runtime_wind_listener(
                     effective_wind_profile=str(stop_reason["effective_wind_profile"]),
                     triggered_at=dt_util.now().isoformat(),
                 )
+                await plan_coordinator.async_cancel_automatic_cycle(controller.device_id)
                 await coordinator.async_stop_watering(controller.device_id)
                 await coordinator.async_request_refresh()
                 await plan_coordinator.async_request_refresh()
@@ -368,6 +378,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         """Handle the stop-watering service."""
 
         coordinator = _async_find_coordinator(hass, call.data[ATTR_DEVICE_ID])
+        entry = _async_find_entry_for_coordinator(hass, coordinator)
+        if entry.runtime_data.plan_coordinator is not None:
+            await entry.runtime_data.plan_coordinator.async_cancel_automatic_cycle(
+                call.data[ATTR_DEVICE_ID]
+            )
         await coordinator.async_stop_watering(call.data[ATTR_DEVICE_ID])
 
     async def async_handle_refresh(call: ServiceCall) -> None:

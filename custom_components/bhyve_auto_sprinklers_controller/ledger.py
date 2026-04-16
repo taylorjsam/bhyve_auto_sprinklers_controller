@@ -82,6 +82,29 @@ class BhyveWaterBalanceStore:
             return {}
         return deepcopy(hold)
 
+    def get_automatic_cycle(self, device_id: str) -> dict[str, Any]:
+        """Return a persisted in-progress automatic watering cycle."""
+
+        controllers = self._data.get("controllers", {})
+        controller = controllers.get(device_id, {})
+        cycle = controller.get("automatic_cycle", {})
+        if not isinstance(cycle, Mapping):
+            return {}
+        return deepcopy(cycle)
+
+    def get_automatic_cycle_device_ids(self) -> set[str]:
+        """Return controller ids with a persisted automatic watering cycle."""
+
+        controllers = self._data.get("controllers", {})
+        if not isinstance(controllers, Mapping):
+            return set()
+        return {
+            str(device_id)
+            for device_id, controller in controllers.items()
+            if isinstance(controller, Mapping)
+            and isinstance(controller.get("automatic_cycle"), Mapping)
+        }
+
     def get_daily_rain_tracker(self) -> dict[str, Any]:
         """Return the persisted intraday rain-timing tracker."""
 
@@ -407,6 +430,31 @@ class BhyveWaterBalanceStore:
         if records.get(zone_key) == new_record:
             return
         records[zone_key] = new_record
+        await self._store.async_save(self._data)
+
+    async def async_set_automatic_cycle(
+        self,
+        device_id: str,
+        cycle: Mapping[str, Any],
+    ) -> None:
+        """Persist an in-progress automatic watering cycle for restart recovery."""
+
+        await self.async_load()
+        controller = self._ensure_controller(device_id)
+        new_record = deepcopy(dict(cycle))
+        if controller.get("automatic_cycle") == new_record:
+            return
+        controller["automatic_cycle"] = new_record
+        await self._store.async_save(self._data)
+
+    async def async_clear_automatic_cycle(self, device_id: str) -> None:
+        """Clear a persisted automatic watering cycle."""
+
+        await self.async_load()
+        controller = self._ensure_controller(device_id)
+        if "automatic_cycle" not in controller:
+            return
+        controller.pop("automatic_cycle", None)
         await self._store.async_save(self._data)
 
     async def async_set_controller_weather_stop_hold(

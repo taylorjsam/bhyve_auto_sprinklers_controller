@@ -170,6 +170,9 @@ class BhyveSprinklerZoneValve(BhyveZoneCoordinatorEntity, ValveEntity):
                 f"Zone {active_run.zone_number} is currently running on this controller"
             )
 
+        plan_coordinator = self._entry.runtime_data.plan_coordinator
+        if plan_coordinator is not None:
+            await plan_coordinator.async_cancel_automatic_cycle(self._device_id)
         await self.coordinator.async_stop_watering(self._device_id)
 
     @property
